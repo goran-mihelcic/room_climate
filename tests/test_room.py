@@ -408,3 +408,46 @@ async def test_restore_after_restart(hass, house, freezer) -> None:
     assert hass.states.get("switch.living_room_override").state == "on"
     assert hass.states.get("time.living_room_comfort_start").state == "05:00:00"
     assert _st(hass, TRV_LR) == ("heat", 23.5)
+
+
+async def test_boost_with_ac_keeps_radiators_at_target(hass, house, freezer) -> None:
+    hass.states.async_set("sensor.living_temp", "16.2", {"device_class": "temperature"})
+    await _setup(hass, freezer, boost_method="coolers", has_bathroom=False)
+    for e in (THERMO, TRV_LR, TRV_DIN):
+        assert _st(hass, e) == ("heat", 21.0)
+    assert _st(hass, AC) == ("heat", 21.0)
+    assert hass.states.get("sensor.living_room_status").state == "boost"
+
+    # kid sets the AC to 30 during boost -> reverted, not adopted
+    st = hass.states.get(AC)
+    hass.states.async_set(AC, "heat", {**st.attributes, "temperature": 30})
+    await _settle(hass, freezer)
+    assert _st(hass, AC) == ("heat", 21.0)
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+
+    # room reaches target -> AC off, radiators unchanged
+    hass.states.async_set("sensor.living_temp", "20.8", {"device_class": "temperature"})
+    await _settle(hass, freezer)
+    assert _st(hass, AC)[0] == "off"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    assert hass.states.get("sensor.living_room_status").state == "comfort"
+
+
+async def test_boost_both(hass, house, freezer) -> None:
+    hass.states.async_set("sensor.living_temp", "16.2", {"device_class": "temperature"})
+    await _setup(hass, freezer, boost_method="both", has_bathroom=False)
+    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    assert _st(hass, AC) == ("heat", 21.0)
+
+
+async def test_boost_with_ac_needs_a_cooler(hass, house) -> None:
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    room = {k: v for k, v in OPTIONS.items() if k not in ("bath_heaters", "bath_floor", "coolers")}
+    room["has_bathroom"] = False
+    room["boost_method"] = "coolers"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "Bedroom", **room}
+    )
+    assert result["errors"] == {"boost_method": "boost_needs_cooler"}

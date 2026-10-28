@@ -22,6 +22,11 @@ CONF_HAS_BATHROOM: Final = "has_bathroom"
 CONF_BATH_HEATERS: Final = "bath_heaters"
 CONF_BATH_FLOOR: Final = "bath_floor"
 
+CONF_BOOST_METHOD: Final = "boost_method"
+BOOST_HEATERS: Final = "heaters"  # raise heating setpoints by the boost offset
+BOOST_COOLERS: Final = "coolers"  # run the cooling device (AC) in heat mode
+BOOST_BOTH: Final = "both"
+
 POLICY_FOLLOW: Final = "follow"
 POLICY_BLOCK: Final = "block"
 

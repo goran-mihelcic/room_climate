@@ -34,11 +34,15 @@ from .const import (
     AWAY_STATES,
     BATH_NUMBERS,
     BATH_TIMES,
+    BOOST_BOTH,
+    BOOST_COOLERS,
     BOOST_EXIT_MARGIN,
+    BOOST_HEATERS,
     COMMAND_GRACE_SECONDS,
     CONF_AT_HOME,
     CONF_BATH_FLOOR,
     CONF_BATH_HEATERS,
+    CONF_BOOST_METHOD,
     CONF_COOL_MAX,
     CONF_COOL_MIN,
     CONF_COOLERS,
@@ -118,6 +122,10 @@ class RoomController:
         opts = entry.options
 
         self.policy: str = opts.get(CONF_MANUAL_POLICY, POLICY_FOLLOW)
+        method = opts.get(CONF_BOOST_METHOD, BOOST_HEATERS)
+        if method != BOOST_HEATERS and not opts.get(CONF_COOLERS):
+            method = BOOST_HEATERS  # nothing to boost with but the heaters
+        self.boost_method: str = method
         self.limits = {
             KIND_HEAT: (
                 opts.get(CONF_HEAT_MIN, DEFAULT_HEAT_MIN),
@@ -164,6 +172,7 @@ class RoomController:
         self.in_bath_period: bool = False
         self.room_temperature: float | None = None
         self.boost: bool = False
+        self.cooler_boost: bool = False
         self.room_target: float | None = None
         self.heater_setpoint: float | None = None
         self.room_status: str = "waiting"
@@ -316,7 +325,13 @@ class RoomController:
                 "%s: manual setpoint %.1f on %s blocked", self.entry.title, temp, entity_id
             )
             return
-        low, high = self.limits.get(group.kind, (None, None))
+        if group is self.coolers and want_mode == "heat":
+            _LOGGER.info(
+                "%s: setpoint %.1f on %s during boost reverted", self.entry.title, temp, entity_id
+            )
+            return
+        kind = KIND_HEAT if want_mode == "heat" and group.kind != KIND_FLOOR else group.kind
+        low, high = self.limits.get(kind, (None, None))
         adopted = temp
         if low is not None:
             adopted = max(low, adopted)
@@ -452,8 +467,10 @@ class RoomController:
                 self.boost = False
         else:
             self.boost = False
+        raise_heaters = self.boost and self.boost_method in (BOOST_HEATERS, BOOST_BOTH)
+        self.cooler_boost = self.boost and self.boost_method in (BOOST_COOLERS, BOOST_BOTH)
         self.heater_setpoint = (
-            target + v["boost_offset"] if (self.boost and target is not None) else target
+            target + v["boost_offset"] if (raise_heaters and target is not None) else target
         )
         if self.boost:
             status = "boost"
@@ -491,7 +508,10 @@ class RoomController:
             return plan  # hold everything as it is
         if self.regime == REGIME_HEAT:
             put(self.heaters, "heat", self.heater_setpoint)
-            put(self.coolers, "off", None)
+            if self.cooler_boost:
+                put(self.coolers, "heat", self.room_target)
+            else:
+                put(self.coolers, "off", None)
         elif self.regime == REGIME_COOL:
             put(self.heaters, "off", None)
             put(self.coolers, "cool", self.room_target)
@@ -632,6 +652,7 @@ class RoomController:
             "in_comfort_period": self.in_comfort,
             "room_temperature": self.room_temperature,
             "boost": self.boost,
+            "boost_method": self.boost_method,
             "heater_setpoint": self.heater_setpoint,
             "manual_target": manual,
             "manually_off": sorted(self.heaters.manual_off | self.coolers.manual_off),

@@ -11,9 +11,13 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector as sel
 
 from .const import (
+    BOOST_BOTH,
+    BOOST_COOLERS,
+    BOOST_HEATERS,
     CONF_AT_HOME,
     CONF_BATH_FLOOR,
     CONF_BATH_HEATERS,
+    CONF_BOOST_METHOD,
     CONF_COOL_MAX,
     CONF_COOL_MIN,
     CONF_COOLERS,
@@ -72,6 +76,13 @@ ROOM_SCHEMA = vol.Schema(
         vol.Required(CONF_HEAT_MAX, default=DEFAULT_HEAT_MAX): _temp_selector(),
         vol.Required(CONF_COOL_MIN, default=DEFAULT_COOL_MIN): _temp_selector(),
         vol.Required(CONF_COOL_MAX, default=DEFAULT_COOL_MAX): _temp_selector(),
+        vol.Required(CONF_BOOST_METHOD, default=BOOST_HEATERS): sel.SelectSelector(
+            sel.SelectSelectorConfig(
+                options=[BOOST_HEATERS, BOOST_COOLERS, BOOST_BOTH],
+                translation_key="boost_method",
+                mode=sel.SelectSelectorMode.LIST,
+            )
+        ),
         vol.Required(CONF_HAS_BATHROOM, default=False): sel.BooleanSelector(),
     }
 )
@@ -92,6 +103,10 @@ def _validate_room(user_input: dict[str, Any]) -> dict[str, str]:
         errors[CONF_HEAT_MAX] = "bad_range"
     if user_input[CONF_COOL_MIN] > user_input[CONF_COOL_MAX]:
         errors[CONF_COOL_MAX] = "bad_range"
+    if user_input.get(CONF_BOOST_METHOD, BOOST_HEATERS) != BOOST_HEATERS and not user_input.get(
+        CONF_COOLERS
+    ):
+        errors[CONF_BOOST_METHOD] = "boost_needs_cooler"
     managed = set(user_input.get(CONF_HEATERS, [])) & set(user_input.get(CONF_COOLERS, []))
     if managed:
         errors[CONF_COOLERS] = "overlap"
