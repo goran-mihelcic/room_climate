@@ -1,0 +1,13 @@
+{
+  "domain": "room_climate",
+  "name": "Room Climate",
+  "codeowners": ["@goran-mihelcic"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/goran-mihelcic/room_climate",
+  "integration_type": "device",
+  "iot_class": "calculated",
+  "issue_tracker": "https://github.com/goran-mihelcic/room_climate/issues",
+  "requirements": [],
+  "version": "0.1.0"
+}
