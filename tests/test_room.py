@@ -10,6 +10,8 @@ from homeassistant import config_entries
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant, State
 from homeassistant.data_entry_flow import FlowResultType
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 from pytest_homeassistant_custom_component.common import (
     MockConfigEntry,
@@ -280,6 +282,27 @@ async def test_new_room_form_takes_settings_from_last_room(hass: HomeAssistant, 
         assert suggested.get(key) is None
 
 
+async def test_devices_are_registered(hass: HomeAssistant, house, freezer) -> None:
+    entry = await _setup(hass, freezer)
+    devices = dr.async_get(hass)
+
+    def device(entry_id, suffix=""):
+        found = dr.async_entries_for_config_entry(devices, entry_id)
+        return next(d for d in found if (DOMAIN, entry_id + suffix) in d.identifiers)
+
+    room = device(entry.entry_id)
+    bath = device(entry.entry_id, "_bath")
+    assert room.name == "Living Room"
+    assert bath.via_device_id == room.id
+    house_entry = next(
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.data["type"] == "house"
+    )
+    assert device(house_entry.entry_id).name == "House"
+    entities = er.async_get(hass)
+    assert entities.async_get("switch.living_room_in_use").device_id == room.id
+    assert entities.async_get("sensor.living_room_bathroom_status").device_id == bath.id
+
+
 async def test_old_entry_must_be_re_added(hass: HomeAssistant, house) -> None:
     entry = MockConfigEntry(domain=DOMAIN, title="Old", version=1, options=ROOM_OPTIONS)
     entry.add_to_hass(hass)
@@ -301,6 +324,8 @@ async def test_options_flows(hass, house, freezer) -> None:
     assert "bath_floor" not in entry.options
     bath = hass.states.get("sensor.living_room_bathroom_status")
     assert bath is None or bath.state == "unavailable"
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    assert [d.name for d in devices] == ["Living Room"]  # bathroom device removed
 
     house_entry = next(
         e for e in hass.config_entries.async_entries(DOMAIN) if e.data["type"] == "house"

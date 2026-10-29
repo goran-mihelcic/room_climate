@@ -7,8 +7,9 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
-from .const import CONF_ENTRY_TYPE, TYPE_HOUSE
+from .const import CONF_ENTRY_TYPE, DOMAIN, TYPE_HOUSE
 from .controller import RoomController
 from .house import HouseController
 
@@ -31,10 +32,35 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoomClimateConfigEntry) 
     else:
         controller = RoomController(hass, entry)
     entry.runtime_data = controller
+    _async_register_devices(hass, entry, controller)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await controller.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
+
+
+def _async_register_devices(
+    hass: HomeAssistant, entry: RoomClimateConfigEntry, controller: RoomController | HouseController
+) -> None:
+    """Create the devices up front so the bathroom can be linked to its room.
+
+    `via_device` in DeviceInfo is deprecated from HA 2026.8 and `via_device_id` is not
+    accepted on creation before that, so the link is set with an update, which every
+    supported version accepts.
+    """
+    devices = dr.async_get(hass)
+    main = devices.async_get_or_create(config_entry_id=entry.entry_id, **controller.device_info)
+    bath_id = (DOMAIN, f"{entry.entry_id}_bath")
+    if isinstance(controller, RoomController) and controller.has_bathroom:
+        bath = devices.async_get_or_create(
+            config_entry_id=entry.entry_id, **controller.bath_device_info
+        )
+        if bath.via_device_id != main.id:
+            devices.async_update_device(bath.id, via_device_id=main.id)
+        return
+    for device in dr.async_entries_for_config_entry(devices, entry.entry_id):
+        if bath_id in device.identifiers:  # bathroom removed in Configure
+            devices.async_remove_device(device.id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: RoomClimateConfigEntry) -> bool:

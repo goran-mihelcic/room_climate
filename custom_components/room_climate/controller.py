@@ -148,8 +148,7 @@ class RoomController:
             name=f"{entry.title} Bathroom",
             manufacturer="Room Climate",
             model="Bathroom controller",
-            via_device=(DOMAIN, entry.entry_id),
-        )
+        )  # linked to the room device in __init__._async_register_devices
 
         self.driver = ClimateDriver(hass, entry.title, self._notify_targets)
         self._listeners: list[CALLBACK_TYPE] = []
