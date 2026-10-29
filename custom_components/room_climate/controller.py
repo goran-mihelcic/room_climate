@@ -122,10 +122,8 @@ class RoomController:
         opts = entry.options
 
         self.policy: str = opts.get(CONF_MANUAL_POLICY, POLICY_FOLLOW)
-        method = opts.get(CONF_BOOST_METHOD, BOOST_HEATERS)
-        if method != BOOST_HEATERS and not opts.get(CONF_COOLERS):
-            method = BOOST_HEATERS  # nothing to boost with but the heaters
-        self.boost_method: str = method
+        # Initial boost method: an option from 0.2.0 if one was set, else heaters.
+        self._initial_boost_method = opts.get(CONF_BOOST_METHOD, BOOST_HEATERS)
         self.limits = {
             KIND_HEAT: (
                 opts.get(CONF_HEAT_MIN, DEFAULT_HEAT_MIN),
@@ -159,6 +157,9 @@ class RoomController:
         self.values: dict[str, Any] = {k: v[4] for k, v in ROOM_NUMBERS.items()}
         self.values.update({k: v[1] for k, v in ROOM_TIMES.items()})
         self.values.update({"enabled": True, "override": False, "override_until": None})
+        self.values["boost_method"] = (
+            self._initial_boost_method if self.coolers.entities else BOOST_HEATERS
+        )
         if self.has_bathroom:
             self.values.update({k: v[4] for k, v in BATH_NUMBERS.items()})
             self.values.update({k: v[1] for k, v in BATH_TIMES.items()})
@@ -200,6 +201,11 @@ class RoomController:
         self._debouncer = Debouncer(
             hass, _LOGGER, cooldown=2.0, immediate=False, function=self._async_apply
         )
+
+    @property
+    def boost_method(self) -> str:
+        method = self.values["boost_method"]
+        return method if self.coolers.entities else BOOST_HEATERS
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -440,14 +440,20 @@ async def test_boost_both(hass, house, freezer) -> None:
     assert _st(hass, AC) == ("heat", 21.0)
 
 
-async def test_boost_with_ac_needs_a_cooler(hass, house) -> None:
-    result = await hass.config_entries.flow.async_init(
-        DOMAIN, context={"source": config_entries.SOURCE_USER}
+async def test_boost_method_select_on_device(hass, house, freezer) -> None:
+    hass.states.async_set("sensor.living_temp", "16.2", {"device_class": "temperature"})
+    await _setup(hass, freezer, has_bathroom=False)
+    sel = "select.living_room_boost_method"
+    assert hass.states.get(sel).state == "heaters"
+    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    await hass.services.async_call(
+        "select", "select_option", {"entity_id": sel, "option": "coolers"}, blocking=True
     )
-    room = {k: v for k, v in OPTIONS.items() if k not in ("bath_heaters", "bath_floor", "coolers")}
-    room["has_bathroom"] = False
-    room["boost_method"] = "coolers"
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"name": "Bedroom", **room}
-    )
-    assert result["errors"] == {"boost_method": "boost_needs_cooler"}
+    await _settle(hass, freezer)
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    assert _st(hass, AC) == ("heat", 21.0)
+
+
+async def test_no_boost_select_without_cooler(hass, house, freezer) -> None:
+    await _setup(hass, freezer, coolers=[], has_bathroom=False)
+    assert hass.states.get("select.living_room_boost_method") is None

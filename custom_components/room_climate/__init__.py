@@ -8,7 +8,13 @@ from homeassistant.core import HomeAssistant
 
 from .controller import RoomController
 
-PLATFORMS: list[Platform] = [Platform.NUMBER, Platform.TIME, Platform.SWITCH, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.NUMBER,
+    Platform.SELECT,
+    Platform.TIME,
+    Platform.SWITCH,
+    Platform.SENSOR,
+]
 
 type RoomClimateConfigEntry = ConfigEntry[RoomController]
 

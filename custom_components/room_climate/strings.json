@@ -16,16 +16,14 @@
           "manual_heat_max": "Highest accepted manual heating setpoint",
           "manual_cool_min": "Lowest accepted manual cooling setpoint",
           "manual_cool_max": "Highest accepted manual cooling setpoint",
-          "has_bathroom": "Room has a bathroom",
-          "boost_method": "Boost method"
+          "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
           "at_home_entity": "When this is off/away, the room goes to frost protection.",
           "house_status_entity": "States: Heating, Cooling, Frost protection, Comfort.",
           "room_sensor": "Optional. Without it, the average of the heating devices' own readings is used (usually reads high next to a radiator).",
           "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
-          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C.",
-          "boost_method": "How to heat faster when the room is far below target. Using the AC keeps the radiators at the target temperature."
+          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C."
         }
       },
       "bathroom": {
@@ -42,8 +40,7 @@
       "bad_range": "The highest value must be at least the lowest value.",
       "overlap": "A device cannot be both a heating and a cooling device.",
       "no_bath_devices": "Select a bathroom heating device or floor heating.",
-      "bath_overlap": "Bathroom devices must not also be room devices.",
-      "boost_needs_cooler": "Select a cooling device to boost with the AC."
+      "bath_overlap": "Bathroom devices must not also be room devices."
     }
   },
   "options": {
@@ -61,13 +58,11 @@
           "manual_heat_max": "Highest accepted manual heating setpoint",
           "manual_cool_min": "Lowest accepted manual cooling setpoint",
           "manual_cool_max": "Highest accepted manual cooling setpoint",
-          "has_bathroom": "Room has a bathroom",
-          "boost_method": "Boost method"
+          "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
           "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
-          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C.",
-          "boost_method": "How to heat faster when the room is far below target. Using the AC keeps the radiators at the target temperature."
+          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C."
         }
       },
       "bathroom": {
@@ -83,8 +78,7 @@
       "bad_range": "The highest value must be at least the lowest value.",
       "overlap": "A device cannot be both a heating and a cooling device.",
       "no_bath_devices": "Select a bathroom heating device or floor heating.",
-      "bath_overlap": "Bathroom devices must not also be room devices.",
-      "boost_needs_cooler": "Select a cooling device to boost with the AC."
+      "bath_overlap": "Bathroom devices must not also be room devices."
     }
   },
   "selector": {
@@ -92,13 +86,6 @@
       "options": {
         "follow": "Follow (within limits) until the next period change",
         "block": "Block: always restore the planned temperature"
-      }
-    },
-    "boost_method": {
-      "options": {
-        "heaters": "Raise heating setpoints by the boost offset",
-        "coolers": "Run the cooling device (AC) in heat mode",
-        "both": "Both"
       }
     }
   },
@@ -124,6 +111,16 @@
           "bath_period": "Bathroom period",
           "follow_room": "Following room",
           "manual": "Manual"
+        }
+      }
+    },
+    "select": {
+      "boost_method": {
+        "name": "Boost method",
+        "state": {
+          "heaters": "Raise heating setpoints",
+          "coolers": "AC in heat mode",
+          "both": "Both"
         }
       }
     }

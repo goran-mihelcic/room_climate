@@ -21,7 +21,6 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | Room temperature sensor | optional; without it the average of the heaters' own readings is used |
 | Manual changes | *Follow (within limits)* or *Block* |
 | Manual limits | heating 16–24 °C, cooling 22–28 °C |
-| Boost method | *Raise heating setpoints*, *Run the AC in heat mode*, or *Both* |
 | Room has a bathroom | ticking it opens a second step for bathroom heaters and floor heating |
 
 House entities are pre-filled from the first room you created. Everything can be changed later with **Configure** on the integration.
@@ -38,7 +37,7 @@ House entities are pre-filled from the first room you created. Everything can be
 
 - **Comfort period:** between *Comfort start* and *Comfort end* (time entities on the device). Outside it, the setback applies (heating: setpoint − setback, cooling: setpoint + setback).
 - **Override:** the switch applies the override temperature for the override duration (0 = until switched off). Survives restarts.
-- **Boost:** when heating and the room is more than the boost threshold below target, boost starts; it ends when the room is within 0.3 °C of target. The **boost method** (in Configure) decides how:
+- **Boost:** when heating and the room is more than the boost threshold below target, boost starts; it ends when the room is within 0.3 °C of target. The **Boost method** selector on the room device decides how (shown only for rooms with a cooling device):
   - *Raise heating setpoints:* heaters get target + boost offset, capped at each device's max.
   - *Run the AC in heat mode:* heaters stay at the target, and the cooling device heats at the target until boost ends, then switches off. Setpoint changes on the AC during boost are reverted.
   - *Both:* raised heater setpoints plus the AC.
@@ -64,7 +63,7 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 
 - **Sensors:** *Target temperature* (with all state as attributes), *Status* (`comfort`, `setback`, `boost`, `manual`, `override`, `frost_protection`, `off`, `waiting`)
 - **Controls:** *Enabled*, *Override*, *Heating setpoint*, *Cooling setpoint*, *Override temperature*
-- **Configuration:** *Comfort start/end*, *Setback*, *Frost protection temperature*, *Boost threshold*, *Boost offset*, *Override duration*
+- **Configuration:** *Boost method* (rooms with AC), *Comfort start/end*, *Setback*, *Frost protection temperature*, *Boost threshold*, *Boost offset*, *Override duration*
 - **Bathroom device:** *Target temperature*, *Status*, *Comfort temperature*, *Floor heating temperature*, morning and evening period start/end
 
 ## Debug logging
