@@ -1,0 +1,4 @@
+# Test and lint dependencies. Pulls in a matching Home Assistant core.
+# Last verified: pytest-homeassistant-custom-component 0.13.316 = Home Assistant 2026.2.3
+pytest-homeassistant-custom-component==0.13.316
+ruff==0.17.3
