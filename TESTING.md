@@ -1,6 +1,6 @@
 # Running the tests
 
-The tests start a real Home Assistant core in memory, load Room Climate, and drive simulated climate devices (TRVs, thermostat, AC, bathroom radiator and floor heating). No Home Assistant installation, broker or real devices are needed, and nothing touches your house.
+The tests start a real Home Assistant core in memory, load Room Climate, and drive simulated climate devices (radiator heads, floor thermostat, A/C, bathroom radiator and floor heating). No Home Assistant installation, broker or real devices are needed, and nothing touches your house.
 
 A full run takes a few seconds.
 
@@ -88,7 +88,7 @@ Your prompt now starts with `(.venv)`.
 |---|---|
 | Run all tests | `pytest` |
 | Short output | `pytest -q` |
-| One test | `pytest -k test_boost_with_ac_keeps_radiators_at_target` |
+| One test | `pytest -k test_boost_with_ac` |
 | Tests whose name matches a word | `pytest -k bath` |
 | Stop at the first failure, show prints/logs | `pytest -x -s` |
 | Show the integration's debug log on failure | `pytest -x --log-level=DEBUG` |
@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-25 passed in 2.4s
+44 passed in 3.0s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -116,12 +116,17 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 
 | Area | Examples |
 |---|---|
-| Setup dialogs | room + bathroom steps, overlapping devices rejected, house entities pre-filled, Configure dialog |
-| House status | Heating, Cooling, Frost protection, Comfort, unavailable status leaves devices alone |
-| Presence and Enabled | away → frost protection, disabled room |
-| Schedules | comfort window and setback, bathroom morning/evening periods, floor heating on/off |
-| Boost | raise heaters, AC in heat mode, both, hysteresis, select on the device |
-| Manual changes | AC remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
+| Setup dialogs | house first, then room + bathroom steps, new room pre-filled from the last room's settings, overlapping devices and unknown notify services rejected, Configure for house and room, 0.2 entries refused |
+| HVAC season | Heating, Cooling, Frost protection, Comfort; unavailable season or no House leaves devices alone |
+| Presence and In use | nobody home in heating → frost, room not in use → frost, cooling needs in use and someone home |
+| Pre-heat | Prepare house in frost protection pre-heats rooms in use only, pre-heat and frost temperatures on the House |
+| Schedules | comfort/eco from the room schedule, A/C off outside it, bathroom schedule and floor heating |
+| Radiator correction | radiator reading high is corrected, hysteresis, cap, manual change on a corrected radiator, no correction without a room sensor |
+| Floor thermostat | highest radiator setpoint across rooms and bathroom, off when nothing heats |
+| Boost | raise radiators, A/C in heat mode, both, hysteresis, configurable exit margin, select on the device |
+| A/C commands | mode → temperature → fan auto, mode not taken: retried, reported once, recovered |
+| Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
+| Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
 | Override and restart | override expiry, values and override restored after a restart |
 
 ## Troubleshooting

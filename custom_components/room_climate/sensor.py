@@ -1,4 +1,4 @@
-"""Target and status sensors for a room and its bathroom."""
+"""Season sensor for the house; target and status sensors for a room and its bathroom."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import RoomClimateConfigEntry
-from .const import BATH_STATUSES, ROOM_STATUSES
+from .const import BATH_STATUSES, HOUSE_STATUSES, ROOM_STATUSES
 from .controller import RoomController
 from .entity import RoomClimateMixin
+from .house import HouseController
 
 
 async def async_setup_entry(
@@ -21,6 +22,9 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     ctl = entry.runtime_data
+    if isinstance(ctl, HouseController):
+        async_add_entities([SeasonSensor(ctl)])
+        return
     entities: list[SensorEntity] = [
         TargetSensor(ctl, "target", "Target temperature", bathroom=False),
         StatusSensor(ctl, "status", "Status", bathroom=False),
@@ -31,6 +35,30 @@ async def async_setup_entry(
             StatusSensor(ctl, "bath_status", "Status", bathroom=True),
         ]
     async_add_entities(entities)
+
+
+class SeasonSensor(RoomClimateMixin, SensorEntity):
+    """The HVAC season as the integration understands it, plus the floor thermostats."""
+
+    _attr_device_class = SensorDeviceClass.ENUM
+    _attr_options = HOUSE_STATUSES
+    _attr_translation_key = "house_season"
+    _attr_icon = "mdi:home-thermometer"
+
+    def __init__(self, ctl: HouseController) -> None:
+        super().__init__(ctl, "season", "Season")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self._ctl.async_add_listener(self.async_write_ha_state))
+
+    @property
+    def native_value(self) -> str:
+        return self._ctl.read_season() or "waiting"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return self._ctl.attributes()
 
 
 class _ControllerSensor(RoomClimateMixin, SensorEntity):

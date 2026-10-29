@@ -1,4 +1,4 @@
-"""Setpoints and tuning values for a room."""
+"""Setpoints and tuning values for the house and each room."""
 
 from __future__ import annotations
 
@@ -8,11 +8,10 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import RoomClimateConfigEntry
-from .const import BATH_NUMBERS, ROOM_NUMBERS
+from .const import BATH_NUMBERS, CONFIG_NUMBERS, HOUSE_NUMBERS, ROOM_NUMBERS
 from .controller import RoomController
 from .entity import RoomClimateMixin
-
-CONFIG_KEYS = {"setback", "frost", "boost_delta", "boost_offset", "override_minutes"}
+from .house import HouseController
 
 
 async def async_setup_entry(
@@ -21,6 +20,11 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     ctl = entry.runtime_data
+    if isinstance(ctl, HouseController):
+        async_add_entities(
+            [RoomNumber(ctl, key, spec, False) for key, spec in HOUSE_NUMBERS.items()]
+        )
+        return
     entities = [RoomNumber(ctl, key, spec, False) for key, spec in ROOM_NUMBERS.items()]
     if ctl.has_bathroom:
         entities += [RoomNumber(ctl, key, spec, True) for key, spec in BATH_NUMBERS.items()]
@@ -32,7 +36,9 @@ class RoomNumber(RoomClimateMixin, RestoreNumber):
 
     _attr_mode = NumberMode.BOX
 
-    def __init__(self, ctl: RoomController, key: str, spec: tuple, bathroom: bool) -> None:
+    def __init__(
+        self, ctl: RoomController | HouseController, key: str, spec: tuple, bathroom: bool
+    ) -> None:
         name, low, high, step, default, unit = spec
         super().__init__(ctl, key, name, bathroom)
         self._attr_native_min_value = low
@@ -40,7 +46,7 @@ class RoomNumber(RoomClimateMixin, RestoreNumber):
         self._attr_native_step = step
         self._attr_native_unit_of_measurement = unit
         self._attr_native_value = ctl.values.get(key, default)
-        if key in CONFIG_KEYS:
+        if key in CONFIG_NUMBERS:
             self._attr_entity_category = EntityCategory.CONFIG
 
     async def async_added_to_hass(self) -> None:

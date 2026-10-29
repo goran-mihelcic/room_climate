@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import logging
 import time as monotonic_time
-from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime, time, timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
+from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
 from homeassistant.core import (
     CALLBACK_TYPE,
-    Context,
     Event,
     EventStateChangedData,
     HomeAssistant,
     callback,
 )
-from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import (
@@ -28,89 +24,51 @@ from homeassistant.helpers.event import (
     async_track_time_interval,
 )
 from homeassistant.helpers.start import async_at_started
-from homeassistant.util import dt as dt_util
 
 from .const import (
-    AWAY_STATES,
     BATH_NUMBERS,
-    BATH_TIMES,
     BOOST_BOTH,
     BOOST_COOLERS,
-    BOOST_EXIT_MARGIN,
     BOOST_HEATERS,
     COMMAND_GRACE_SECONDS,
-    CONF_AT_HOME,
     CONF_BATH_FLOOR,
     CONF_BATH_HEATERS,
-    CONF_BOOST_METHOD,
+    CONF_BATH_SCHEDULE,
     CONF_COOL_MAX,
     CONF_COOL_MIN,
     CONF_COOLERS,
+    CONF_FLOOR_THERMOSTAT,
     CONF_HAS_BATHROOM,
     CONF_HEAT_MAX,
     CONF_HEAT_MIN,
     CONF_HEATERS,
-    CONF_HOUSE_STATUS,
+    CONF_HUMIDITY_SENSOR,
     CONF_MANUAL_POLICY,
-    CONF_ROOM_SENSOR,
+    CONF_SCHEDULE,
+    CONF_TEMP_SENSOR,
+    CORRECTION_HYSTERESIS,
     DEFAULT_COOL_MAX,
     DEFAULT_COOL_MIN,
     DEFAULT_HEAT_MAX,
     DEFAULT_HEAT_MIN,
     DOMAIN,
-    HOUSE_COOL,
-    HOUSE_FROST,
-    HOUSE_HEAT,
-    HOUSE_STATUS_MAP,
+    ON_STATES,
     POLICY_FOLLOW,
     REGIME_COOL,
     REGIME_FROST,
     REGIME_HEAT,
     REGIME_OFF,
+    REGIME_PREHEAT,
     ROOM_NUMBERS,
-    ROOM_TIMES,
+    SEASON_COOL,
+    SEASON_FROST,
+    SEASON_HEAT,
     UPDATE_INTERVAL_SECONDS,
 )
+from .driver import KIND_COOL, KIND_FLOOR, KIND_HEAT, ClimateDriver, DeviceGroup, to_float
+from .house import HouseController, get_data
 
 _LOGGER = logging.getLogger(__name__)
-
-KIND_HEAT = "heat"
-KIND_COOL = "cool"
-KIND_FLOOR = "floor"
-
-
-def in_window(now: time, start: time, end: time) -> bool:
-    """Return True if `now` is inside [start, end); handles windows past midnight."""
-    if start == end:
-        return False
-    if start < end:
-        return start <= now < end
-    return now >= start or now < end
-
-
-def _float(value: Any) -> float | None:
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-@dataclass
-class DeviceGroup:
-    """A set of climate entities that are driven together."""
-
-    key: str
-    kind: str
-    entities: list[str]
-    manual_target: float | None = None
-    manual_off: set[str] = field(default_factory=set)
-    period_key: tuple | None = None
-    desired: dict[str, tuple[str, float | None]] = field(default_factory=dict)
-    sent_at: dict[str, float] = field(default_factory=dict)
-
-    def reset_manual(self) -> None:
-        self.manual_target = None
-        self.manual_off.clear()
 
 
 class RoomController:
@@ -122,8 +80,6 @@ class RoomController:
         opts = entry.options
 
         self.policy: str = opts.get(CONF_MANUAL_POLICY, POLICY_FOLLOW)
-        # Initial boost method: an option from 0.2.0 if one was set, else heaters.
-        self._initial_boost_method = opts.get(CONF_BOOST_METHOD, BOOST_HEATERS)
         self.limits = {
             KIND_HEAT: (
                 opts.get(CONF_HEAT_MIN, DEFAULT_HEAT_MIN),
@@ -137,9 +93,10 @@ class RoomController:
         self.has_bathroom: bool = bool(opts.get(CONF_HAS_BATHROOM)) and bool(
             opts.get(CONF_BATH_HEATERS) or opts.get(CONF_BATH_FLOOR)
         )
+        self.thermostat: str | None = opts.get(CONF_FLOOR_THERMOSTAT) or None
 
         self.heaters = DeviceGroup("heaters", KIND_HEAT, list(opts.get(CONF_HEATERS, [])))
-        self.coolers = DeviceGroup("coolers", KIND_COOL, list(opts.get(CONF_COOLERS, [])))
+        self.coolers = DeviceGroup("coolers", KIND_COOL, list(opts.get(CONF_COOLERS, [])), ac=True)
         self.bath_heaters = DeviceGroup(
             "bath_heaters",
             KIND_HEAT,
@@ -155,32 +112,32 @@ class RoomController:
 
         # Values owned by this integration's own entities (restored on start).
         self.values: dict[str, Any] = {k: v[4] for k, v in ROOM_NUMBERS.items()}
-        self.values.update({k: v[1] for k, v in ROOM_TIMES.items()})
-        self.values.update({"enabled": True, "override": False, "override_until": None})
-        self.values["boost_method"] = (
-            self._initial_boost_method if self.coolers.entities else BOOST_HEATERS
-        )
+        self.values.update({"in_use": True, "override": False, "override_until": None})
+        self.values["boost_method"] = BOOST_HEATERS
         if self.has_bathroom:
             self.values.update({k: v[4] for k, v in BATH_NUMBERS.items()})
-            self.values.update({k: v[1] for k, v in BATH_TIMES.items()})
 
         # Computed state, read by the sensors.
-        self.house: str | None = None
+        self.season: str | None = None
         self.at_home: bool = True
+        self.prepare: bool = False
         self.regime: str = REGIME_OFF
         self.reason: str = "waiting"
-        self.in_comfort: bool = False
+        self.in_schedule: bool = False
         self.in_bath_period: bool = False
         self.room_temperature: float | None = None
+        self.humidity: float | None = None
+        self.corrections: dict[str, float] = {}
         self.boost: bool = False
         self.cooler_boost: bool = False
+        self.drying: bool = False
         self.room_target: float | None = None
         self.heater_setpoint: float | None = None
         self.room_status: str = "waiting"
         self.bath_target: float | None = None
         self.bath_status: str = "waiting"
 
-        self.room_device_info = DeviceInfo(
+        self.device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
             manufacturer="Room Climate",
@@ -194,9 +151,8 @@ class RoomController:
             via_device=(DOMAIN, entry.entry_id),
         )
 
+        self.driver = ClimateDriver(hass, entry.title, self._notify_targets)
         self._listeners: list[CALLBACK_TYPE] = []
-        self._driving: set[str] = set()
-        self._own_contexts: deque[str] = deque(maxlen=200)
         self._running = False
         self._debouncer = Debouncer(
             hass, _LOGGER, cooldown=2.0, immediate=False, function=self._async_apply
@@ -207,13 +163,22 @@ class RoomController:
         method = self.values["boost_method"]
         return method if self.coolers.entities else BOOST_HEATERS
 
+    def _house(self) -> HouseController | None:
+        return get_data(self.hass).house
+
+    def _notify_targets(self) -> list[str]:
+        house = self._house()
+        return house.notify_targets() if house else []
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
     async def async_start(self) -> None:
         """Begin watching inputs once Home Assistant has fully started."""
-        watched = [e for e in self._entity_group]
-        for key in (CONF_AT_HOME, CONF_HOUSE_STATUS, CONF_ROOM_SENSOR):
+        data = get_data(self.hass)
+        data.rooms[self.entry.entry_id] = self
+        watched = list(self._entity_group)
+        for key in (CONF_TEMP_SENSOR, CONF_HUMIDITY_SENSOR, CONF_SCHEDULE, CONF_BATH_SCHEDULE):
             if entity_id := self.entry.options.get(key):
                 watched.append(entity_id)
 
@@ -238,6 +203,9 @@ class RoomController:
         def _stop() -> None:
             self._running = False
             self._debouncer.async_shutdown()
+            data.rooms.pop(self.entry.entry_id, None)
+            if house := self._house():
+                house.set_pump_demand(self.entry.entry_id, None)
 
         self.entry.async_on_unload(async_at_started(self.hass, _started))
         self.entry.async_on_unload(_stop)
@@ -276,20 +244,15 @@ class RoomController:
     def _on_state_change(self, event: Event[EventStateChangedData]) -> None:
         entity_id = event.data["entity_id"]
         group = self._entity_group.get(entity_id)
-        if group is not None and not self._is_own(event.context):
+        if group is not None and not self.driver.is_own(event.context):
             self._check_manual_change(group, entity_id, event.data["new_state"])
         self.request_update()
-
-    def _is_own(self, context: Context) -> bool:
-        return context.id in self._own_contexts or (
-            context.parent_id is not None and context.parent_id in self._own_contexts
-        )
 
     @callback
     def _check_manual_change(self, group: DeviceGroup, entity_id: str, new_state) -> None:
         if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
-        if entity_id in self._driving:
+        if entity_id in self.driver.driving:
             return  # echo of a command we are sending right now
         want = group.desired.get(entity_id)
         if want is None:
@@ -323,7 +286,7 @@ class RoomController:
                 )
             return
 
-        temp = _float(new_state.attributes.get("temperature"))
+        temp = to_float(new_state.attributes.get("temperature"))
         if temp is None or want_temp is None or abs(temp - want_temp) < 0.05:
             return
         if not follow:
@@ -336,9 +299,10 @@ class RoomController:
                 "%s: setpoint %.1f on %s during boost reverted", self.entry.title, temp, entity_id
             )
             return
+        # A radiator shows target + correction; the person meant the room temperature.
+        adopted = temp - (self.corrections.get(entity_id, 0.0) if group is self.heaters else 0.0)
         kind = KIND_HEAT if want_mode == "heat" and group.kind != KIND_FLOOR else group.kind
         low, high = self.limits.get(kind, (None, None))
-        adopted = temp
         if low is not None:
             adopted = max(low, adopted)
         if high is not None:
@@ -358,78 +322,93 @@ class RoomController:
     # ------------------------------------------------------------------
     # Reading inputs
     # ------------------------------------------------------------------
-    def _read_house(self) -> str | None:
-        entity_id = self.entry.options.get(CONF_HOUSE_STATUS)
-        if not entity_id:
-            return HOUSE_HEAT
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return None
-        mapped = HOUSE_STATUS_MAP.get(state.state.strip().lower())
-        if mapped is None:
-            _LOGGER.warning("%s: unknown house status '%s'", self.entry.title, state.state)
-        return mapped
-
-    def _read_at_home(self) -> bool:
-        entity_id = self.entry.options.get(CONF_AT_HOME)
-        if not entity_id:
-            return True
-        state = self.hass.states.get(entity_id)
-        if state is None:
-            return True
-        value = state.state.lower()
-        if value in AWAY_STATES:
-            return False
-        return True  # home, or unknown/unavailable -> assume someone is home
-
-    def _read_room_temperature(self) -> float | None:
-        entity_id = self.entry.options.get(CONF_ROOM_SENSOR)
-        if entity_id:
+    def _read_sensor_or_devices(self, sensor_key: str, attribute: str) -> float | None:
+        """A dedicated sensor if configured, else the average reading of the room's devices."""
+        if entity_id := self.entry.options.get(sensor_key):
             state = self.hass.states.get(entity_id)
-            return _float(state.state) if state else None
-        readings = []
-        for heater in self.heaters.entities:
-            state = self.hass.states.get(heater)
-            if state and (value := _float(state.attributes.get("current_temperature"))) is not None:
-                readings.append(value)
-        return round(sum(readings) / len(readings), 1) if readings else None
+            return to_float(state.state) if state else None
+        for group in (self.heaters, self.coolers):
+            readings = []
+            for device in group.entities:
+                state = self.hass.states.get(device)
+                if state and (value := to_float(state.attributes.get(attribute))) is not None:
+                    readings.append(value)
+            if readings:
+                return round(sum(readings) / len(readings), 1)
+        return None
+
+    def _read_schedule(self, key: str) -> bool:
+        """True inside a schedule period. A room without a schedule is always inside."""
+        entity_id = self.entry.options.get(key)
+        if not entity_id:
+            return True
+        state = self.hass.states.get(entity_id)
+        return state is not None and state.state.lower() in ON_STATES
+
+    def _update_corrections(self) -> None:
+        """How much higher than the room sensor each radiator (and A/C) reads."""
+        room = self.room_temperature
+        if not self.entry.options.get(CONF_TEMP_SENSOR) or room is None:
+            self.corrections.clear()
+            return
+        cap = self.values["correction_max"]
+        for entity_id in self.heaters.entities + self.coolers.entities:
+            state = self.hass.states.get(entity_id)
+            reading = to_float(state.attributes.get("current_temperature")) if state else None
+            if reading is None:
+                self.corrections.pop(entity_id, None)
+                continue
+            raw = min(max(reading - room, 0.0), cap)
+            previous = self.corrections.get(entity_id, 0.0)
+            if abs(raw - previous) >= CORRECTION_HYSTERESIS or previous > cap:
+                self.corrections[entity_id] = min(round(raw * 2) / 2, cap)
 
     # ------------------------------------------------------------------
     # Decision logic
     # ------------------------------------------------------------------
-    def _compute(self, now: datetime) -> None:
+    def _compute(self) -> None:
         v = self.values
-        local_time = dt_util.as_local(now).time().replace(microsecond=0)
-        self.house = self._read_house()
-        self.at_home = self._read_at_home()
-        self.room_temperature = self._read_room_temperature()
-        self.in_comfort = in_window(local_time, v["comfort_start"], v["comfort_end"])
-        self.in_bath_period = self.has_bathroom and (
-            in_window(local_time, v["bath_p1_start"], v["bath_p1_end"])
-            or in_window(local_time, v["bath_p2_start"], v["bath_p2_end"])
+        house = self._house()
+        self.season = house.read_season() if house else None
+        self.at_home = house.read_at_home() if house else True
+        self.prepare = house.read_prepare() if house else False
+        self.room_temperature = self._read_sensor_or_devices(
+            CONF_TEMP_SENSOR, "current_temperature"
         )
+        self.humidity = self._read_sensor_or_devices(CONF_HUMIDITY_SENSOR, "current_humidity")
+        self.in_schedule = self._read_schedule(CONF_SCHEDULE)
+        self.in_bath_period = self.has_bathroom and self._read_schedule(CONF_BATH_SCHEDULE)
+        self._update_corrections()
 
         # ---- regime --------------------------------------------------
-        house = self.house
-        if house is None:
+        season = self.season
+        if season == SEASON_HEAT and not self.at_home:
+            season = SEASON_FROST  # the season entity should say so already; be sure
+        in_use = v["in_use"]
+        if house is None or season is None:
             self.regime, self.reason = REGIME_OFF, "waiting"
-        elif not v["enabled"]:
-            self.regime = REGIME_FROST if house in (HOUSE_HEAT, HOUSE_FROST) else REGIME_OFF
-            self.reason = "disabled"
-        elif house == HOUSE_FROST:
-            self.regime, self.reason = REGIME_FROST, "house_frost_protection"
-        elif not self.at_home:
-            self.regime = REGIME_FROST if house == HOUSE_HEAT else REGIME_OFF
-            self.reason = "away"
-        elif house == HOUSE_HEAT:
-            self.regime, self.reason = REGIME_HEAT, "heating"
-        elif house == HOUSE_COOL:
-            self.regime, self.reason = REGIME_COOL, "cooling"
+        elif season == SEASON_FROST:
+            if in_use and self.prepare:
+                self.regime, self.reason = REGIME_PREHEAT, "prepare_house"
+            else:
+                self.regime, self.reason = REGIME_FROST, "house_frost_protection"
+        elif season == SEASON_HEAT:
+            if in_use:
+                self.regime, self.reason = REGIME_HEAT, "heating"
+            else:
+                self.regime, self.reason = REGIME_FROST, "not_in_use"
+        elif season == SEASON_COOL:
+            if not in_use:
+                self.regime, self.reason = REGIME_OFF, "not_in_use"
+            elif not (self.at_home or self.prepare):
+                self.regime, self.reason = REGIME_OFF, "away"
+            else:
+                self.regime, self.reason = REGIME_COOL, "cooling"
         else:
             self.regime, self.reason = REGIME_OFF, "comfort_season"
 
         # ---- period keys: a change resets manual targets ----------------
-        room_key = (self.regime, self.in_comfort, v["override"])
+        room_key = (self.regime, self.in_schedule, v["override"])
         bath_key = (self.regime, self.in_bath_period, v["override"])
         for group, key in (
             (self.heaters, room_key),
@@ -441,27 +420,28 @@ class RoomController:
                 group.reset_manual()
             group.period_key = key
 
-        # ---- room target ------------------------------------------------
+        # ---- target ---------------------------------------------------
         target: float | None = None
         status = "off"
-        active_group: DeviceGroup | None = None
         if self.reason == "waiting":
             status = "waiting"
         elif self.regime == REGIME_FROST:
-            target, status = v["frost"], "frost_protection"
-        elif self.regime in (REGIME_HEAT, REGIME_COOL):
-            heating = self.regime == REGIME_HEAT
-            active_group = self.heaters if heating else self.coolers
-            base = v["heat"] if heating else v["cool"]
-            if self.in_comfort:
-                target, status = base, "comfort"
+            target, status = house.values["frost"], "frost_protection"
+        elif self.regime == REGIME_PREHEAT:
+            target, status = house.values["preheat"], "preheat"
+        elif self.regime == REGIME_HEAT:
+            if self.in_schedule:
+                target, status = v["heat_comfort"], "comfort"
             else:
-                target = base - v["setback"] if heating else base + v["setback"]
-                status = "setback"
+                target, status = v["heat_eco"], "eco"
+        elif self.regime == REGIME_COOL and self.in_schedule:
+            target, status = v["cool"], "comfort"
+        if self.regime in (REGIME_HEAT, REGIME_COOL):
+            active = self.heaters if self.regime == REGIME_HEAT else self.coolers
             if v["override"]:
                 target, status = v["override_temp"], "override"
-            elif active_group.manual_target is not None:
-                target, status = active_group.manual_target, "manual"
+            elif target is not None and active.manual_target is not None:
+                target, status = active.manual_target, "manual"
         self.room_target = target
 
         # ---- boost (heating only, with hysteresis) ----------------------
@@ -469,7 +449,7 @@ class RoomController:
             delta = target - self.room_temperature
             if not self.boost and delta > v["boost_delta"]:
                 self.boost = True
-            elif self.boost and delta <= BOOST_EXIT_MARGIN:
+            elif self.boost and delta <= v["boost_margin"]:
                 self.boost = False
         else:
             self.boost = False
@@ -480,6 +460,25 @@ class RoomController:
         )
         if self.boost:
             status = "boost"
+
+        # ---- drying: A/C dries when the room is neither heated nor cooled ---
+        # Frost protection still counts as "no heating" for drying.
+        can_dry = self.reason != "waiting" and (target is None or self.regime == REGIME_FROST)
+        dry_capable = any(self._supports(e, "dry") for e in self.coolers.entities)
+        was_drying = self.drying
+        if house is not None and can_dry and dry_capable and self.humidity is not None:
+            if not self.drying and self.humidity > house.values["dry_humidity"]:
+                self.drying = True
+            elif self.drying and self.humidity <= (
+                house.values["dry_humidity"] - house.values["dry_hysteresis"]
+            ):
+                self.drying = False
+        else:
+            self.drying = False
+        if self.drying != was_drying:
+            self.coolers.reset_manual()  # an A/C switched off by hand is reconsidered
+        if self.drying and status == "off":
+            status = "drying"
         self.room_status = status
 
         # ---- bathroom ---------------------------------------------------
@@ -488,7 +487,9 @@ class RoomController:
         elif self.reason == "waiting":
             self.bath_target, self.bath_status = None, "waiting"
         elif self.regime == REGIME_FROST:
-            self.bath_target, self.bath_status = v["frost"], "frost_protection"
+            self.bath_target, self.bath_status = target, "frost_protection"
+        elif self.regime == REGIME_PREHEAT:
+            self.bath_target, self.bath_status = target, "follow_room"
         elif self.regime == REGIME_HEAT:
             if self.in_bath_period:
                 self.bath_target, self.bath_status = v["bath_comfort"], "bath_period"
@@ -499,34 +500,50 @@ class RoomController:
         else:
             self.bath_target, self.bath_status = None, "off"
 
+    def _supports(self, entity_id: str, mode: str) -> bool:
+        state = self.hass.states.get(entity_id)
+        return state is not None and mode in (state.attributes.get("hvac_modes") or [])
+
     def _plan(self) -> dict[str, tuple[DeviceGroup, str, float | None]]:
         """Desired (mode, setpoint) for every managed entity."""
         plan: dict[str, tuple[DeviceGroup, str, float | None]] = {}
 
-        def put(group: DeviceGroup, mode: str, temp: float | None) -> None:
+        def put(group: DeviceGroup, mode: str, temp: float | None, corrected: bool = False):
             for entity_id in group.entities:
                 if mode != "off" and entity_id in group.manual_off:
                     plan[entity_id] = (group, "off", None)
+                elif corrected and temp is not None:
+                    plan[entity_id] = (group, mode, temp + self.corrections.get(entity_id, 0.0))
                 else:
                     plan[entity_id] = (group, mode, temp)
+
+        def coolers_idle() -> None:
+            if not self.drying:
+                put(self.coolers, "off", None)
+                return
+            for entity_id in self.coolers.entities:
+                if self._supports(entity_id, "dry") and entity_id not in self.coolers.manual_off:
+                    plan[entity_id] = (self.coolers, "dry", None)
+                else:
+                    plan[entity_id] = (self.coolers, "off", None)
 
         if self.reason == "waiting":
             return plan  # hold everything as it is
         if self.regime == REGIME_HEAT:
-            put(self.heaters, "heat", self.heater_setpoint)
+            put(self.heaters, "heat", self.heater_setpoint, corrected=True)
             if self.cooler_boost:
-                put(self.coolers, "heat", self.room_target)
+                put(self.coolers, "heat", self.room_target, corrected=True)
             else:
-                put(self.coolers, "off", None)
-        elif self.regime == REGIME_COOL:
+                coolers_idle()
+        elif self.regime == REGIME_COOL and self.room_target is not None:
             put(self.heaters, "off", None)
             put(self.coolers, "cool", self.room_target)
-        elif self.regime == REGIME_FROST:
-            put(self.heaters, "heat", self.room_target)
-            put(self.coolers, "off", None)
+        elif self.regime in (REGIME_FROST, REGIME_PREHEAT):
+            put(self.heaters, "heat", self.room_target, corrected=True)
+            coolers_idle()
         else:
             put(self.heaters, "off", None)
-            put(self.coolers, "off", None)
+            coolers_idle()
 
         if self.has_bathroom:
             if self.bath_target is not None:
@@ -544,102 +561,30 @@ class RoomController:
                 put(self.floor, "off", None)
         return plan
 
+    def _pump_demand(
+        self, plan: dict[str, tuple[DeviceGroup, str, float | None]]
+    ) -> dict[str, float | None] | None:
+        """Highest setpoint among this room's heating radiators, for its floor thermostat."""
+        if not self.thermostat or self.reason == "waiting":
+            return None
+        setpoints = [
+            temp
+            for group, mode, temp in plan.values()
+            if group in (self.heaters, self.bath_heaters) and mode == "heat" and temp is not None
+        ]
+        return {self.thermostat: max(setpoints) if setpoints else None}
+
     # ------------------------------------------------------------------
     # Applying to devices
     # ------------------------------------------------------------------
     async def _async_apply(self) -> None:
-        self._compute(dt_util.utcnow())
-        for entity_id, (group, mode, temp) in self._plan().items():
-            await self._async_drive(group, entity_id, mode, temp)
+        self._compute()
+        plan = self._plan()
+        for entity_id, (group, mode, temp) in plan.items():
+            await self.driver.async_drive(group, entity_id, mode, temp)
+        if house := self._house():
+            house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
         self._notify()
-
-    async def _async_drive(
-        self, group: DeviceGroup, entity_id: str, mode: str, temp: float | None
-    ) -> None:
-        self._driving.add(entity_id)
-        try:
-            await self._async_drive_inner(group, entity_id, mode, temp)
-        finally:
-            self._driving.discard(entity_id)
-
-    async def _async_drive_inner(
-        self, group: DeviceGroup, entity_id: str, mode: str, temp: float | None
-    ) -> None:
-        state = self.hass.states.get(entity_id)
-        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-            return
-        attrs = state.attributes
-
-        if temp is not None:
-            step = _float(attrs.get("target_temp_step")) or 0.5
-            low = _float(attrs.get("min_temp"))
-            high = _float(attrs.get("max_temp"))
-            if low is not None:
-                temp = max(low, temp)
-            if high is not None:
-                temp = min(high, temp)
-            temp = round(round(temp / step) * step, 2)
-
-        group.desired[entity_id] = (mode, temp)
-        sent = False
-
-        if mode == "off":
-            if state.state != "off":
-                hvac_modes = attrs.get("hvac_modes") or []
-                if "off" in hvac_modes:
-                    sent = await self._async_call(
-                        group, "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": "off"}
-                    )
-                else:
-                    floor_temp = _float(attrs.get("min_temp"))
-                    if floor_temp is not None and _float(attrs.get("temperature")) != floor_temp:
-                        group.desired[entity_id] = (state.state, floor_temp)
-                        sent = await self._async_call(
-                            group,
-                            "set_temperature",
-                            {ATTR_ENTITY_ID: entity_id, "temperature": floor_temp},
-                        )
-                    else:
-                        group.desired[entity_id] = (state.state, floor_temp)
-        else:
-            if state.state != mode:
-                if mode in (attrs.get("hvac_modes") or []):
-                    sent = await self._async_call(
-                        group, "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": mode}
-                    )
-                else:
-                    _LOGGER.warning(
-                        "%s: %s does not support hvac mode %s", self.entry.title, entity_id, mode
-                    )
-            current = _float(attrs.get("temperature"))
-            if temp is not None and (current is None or abs(current - temp) >= 0.05 or sent):
-                sent = (
-                    await self._async_call(
-                        group, "set_temperature", {ATTR_ENTITY_ID: entity_id, "temperature": temp}
-                    )
-                    or sent
-                )
-
-    async def _async_call(self, group: DeviceGroup, service: str, data: dict[str, Any]) -> bool:
-        _LOGGER.debug("%s: climate.%s %s", self.entry.title, service, data)
-        # Stamp before sending so the device's echo is never taken for a manual change.
-        group.sent_at[data[ATTR_ENTITY_ID]] = monotonic_time.monotonic()
-        context = Context()
-        self._own_contexts.append(context.id)
-        try:
-            await self.hass.services.async_call(
-                "climate", service, data, blocking=True, context=context
-            )
-        except HomeAssistantError as err:
-            _LOGGER.warning(
-                "%s: climate.%s failed for %s: %s",
-                self.entry.title,
-                service,
-                data[ATTR_ENTITY_ID],
-                err,
-            )
-            return False
-        return True
 
     # ------------------------------------------------------------------
     # Attributes for sensors
@@ -652,14 +597,19 @@ class RoomController:
             "status": self.room_status,
             "regime": self.regime,
             "reason": self.reason,
-            "house_status": self.house,
+            "season": self.season,
             "at_home": self.at_home,
-            "enabled": self.values["enabled"],
-            "in_comfort_period": self.in_comfort,
+            "prepare_house": self.prepare,
+            "in_use": self.values["in_use"],
+            "in_schedule": self.in_schedule,
             "room_temperature": self.room_temperature,
+            "humidity": self.humidity,
             "boost": self.boost,
             "boost_method": self.boost_method,
             "heater_setpoint": self.heater_setpoint,
+            "radiator_corrections": dict(self.corrections),
+            "drying": self.drying,
+            "floor_thermostat": self.thermostat,
             "manual_target": manual,
             "manually_off": sorted(self.heaters.manual_off | self.coolers.manual_off),
             "override": self.values["override"],

@@ -1,4 +1,4 @@
-"""Boost method selector (only for rooms that have a cooling device)."""
+"""Boost method selector (only for rooms that have an A/C)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from . import RoomClimateConfigEntry
 from .const import BOOST_BOTH, BOOST_COOLERS, BOOST_HEATERS
 from .controller import RoomController
 from .entity import RoomClimateMixin
+from .house import HouseController
 
 OPTIONS = [BOOST_HEATERS, BOOST_COOLERS, BOOST_BOTH]
 
@@ -22,12 +23,14 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     ctl = entry.runtime_data
-    if ctl.coolers.entities:  # without an AC the only method is raising heaters
+    if isinstance(ctl, HouseController):
+        return
+    if ctl.coolers.entities:  # without an A/C the only method is raising radiators
         async_add_entities([BoostMethodSelect(ctl)])
 
 
 class BoostMethodSelect(RoomClimateMixin, SelectEntity, RestoreEntity):
-    """How the room boosts: raise heater setpoints, run the AC in heat mode, or both."""
+    """How the room boosts: raise radiator setpoints, run the A/C in heat mode, or both."""
 
     _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:rocket-launch"

@@ -1,16 +1,34 @@
 {
   "config": {
     "step": {
-      "user": {
+      "house": {
+        "title": "Add house",
+        "description": "The house is set up once. It holds the HVAC season, presence and the settings shared by all rooms. Add rooms afterwards.",
+        "data": {
+          "name": "Name",
+          "season_entity": "HVAC season entity",
+          "at_home_entity": "At home entity",
+          "prepare_entity": "Prepare house entity",
+          "notify_services": "Notify services"
+        },
+        "data_description": {
+          "season_entity": "States: Heating, Cooling, Comfort, Frost protection.",
+          "at_home_entity": "Off means nobody is home: heating falls back to frost protection, cooling stops.",
+          "prepare_entity": "Optional. When on, rooms in use pre-heat (frost protection season) or cool (cooling season) before arrival.",
+          "notify_services": "Optional. Told when an A/C does not switch mode, e.g. mobile_app_my_phone."
+        }
+      },
+      "room": {
         "title": "Add room",
-        "description": "Pick the house status entities and the devices that heat and cool this room.",
+        "description": "Pick the devices that heat and cool this room.",
         "data": {
           "name": "Room name",
-          "at_home_entity": "At home entity",
-          "house_status_entity": "House climate status entity",
-          "heaters": "Heating devices",
-          "coolers": "Cooling devices",
-          "room_sensor": "Room temperature sensor",
+          "heaters": "Radiators",
+          "coolers": "Air conditioners",
+          "floor_thermostat": "Floor thermostat (pump)",
+          "schedule": "Schedule",
+          "temperature_sensor": "Room temperature sensor",
+          "humidity_sensor": "Room humidity sensor",
           "manual_policy": "Manual changes on devices",
           "manual_heat_min": "Lowest accepted manual heating setpoint",
           "manual_heat_max": "Highest accepted manual heating setpoint",
@@ -19,40 +37,63 @@
           "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
-          "at_home_entity": "When this is off/away, the room goes to frost protection.",
-          "house_status_entity": "States: Heating, Cooling, Frost protection, Comfort.",
-          "room_sensor": "Optional. Without it, the average of the heating devices' own readings is used (usually reads high next to a radiator).",
+          "floor_thermostat": "Optional. Set to the highest radiator setpoint of all rooms on the same thermostat.",
+          "schedule": "Optional schedule helper. On: comfort temperature and cooling. Off: eco temperature, A/C off. Without one the room is always on schedule.",
+          "temperature_sensor": "Optional. Radiators reading higher than this sensor are corrected. Without it the radiators' own readings are used.",
+          "humidity_sensor": "Optional. Without it the radiators' own readings are used.",
           "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
-          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C."
+          "manual_cool_min": "Example: 22 °C stops the A/C being set to 18 °C."
         }
       },
       "bathroom": {
         "title": "Bathroom",
         "description": "Devices for the bathroom of this room.",
         "data": {
-          "bath_heaters": "Bathroom heating devices",
-          "bath_floor": "Floor heating"
+          "bath_heaters": "Bathroom radiators",
+          "bath_floor": "Floor heating",
+          "bath_schedule": "Bathroom schedule"
+        },
+        "data_description": {
+          "bath_schedule": "Schedule helper. On: bathroom comfort temperature and floor heating."
         }
       }
     },
     "error": {
-      "no_heaters": "Select at least one heating device.",
+      "no_heaters": "Select at least one radiator.",
       "bad_range": "The highest value must be at least the lowest value.",
-      "overlap": "A device cannot be both a heating and a cooling device.",
-      "no_bath_devices": "Select a bathroom heating device or floor heating.",
-      "bath_overlap": "Bathroom devices must not also be room devices."
+      "overlap": "A device cannot be both a radiator and an air conditioner.",
+      "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
+      "no_bath_devices": "Select a bathroom radiator or floor heating.",
+      "bath_overlap": "Bathroom devices must not also be room devices.",
+      "unknown_notify": "No such notify service."
+    },
+    "abort": {
+      "house_exists": "The house is already set up."
     }
   },
   "options": {
     "step": {
-      "init": {
+      "house": {
+        "title": "House settings",
+        "data": {
+          "season_entity": "HVAC season entity",
+          "at_home_entity": "At home entity",
+          "prepare_entity": "Prepare house entity",
+          "notify_services": "Notify services"
+        },
+        "data_description": {
+          "notify_services": "Told when an A/C does not switch mode, e.g. mobile_app_my_phone."
+        }
+      },
+      "room": {
         "title": "Room settings",
         "data": {
-          "at_home_entity": "At home entity",
-          "house_status_entity": "House climate status entity",
-          "heaters": "Heating devices",
-          "coolers": "Cooling devices",
-          "room_sensor": "Room temperature sensor",
+          "heaters": "Radiators",
+          "coolers": "Air conditioners",
+          "floor_thermostat": "Floor thermostat (pump)",
+          "schedule": "Schedule",
+          "temperature_sensor": "Room temperature sensor",
+          "humidity_sensor": "Room humidity sensor",
           "manual_policy": "Manual changes on devices",
           "manual_heat_min": "Lowest accepted manual heating setpoint",
           "manual_heat_max": "Highest accepted manual heating setpoint",
@@ -61,24 +102,29 @@
           "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
+          "floor_thermostat": "Set to the highest radiator setpoint of all rooms on the same thermostat.",
+          "schedule": "On: comfort temperature and cooling. Off: eco temperature, A/C off.",
           "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
-          "manual_cool_min": "Example: 22 °C stops the AC being set to 18 °C."
+          "manual_cool_min": "Example: 22 °C stops the A/C being set to 18 °C."
         }
       },
       "bathroom": {
         "title": "Bathroom",
         "data": {
-          "bath_heaters": "Bathroom heating devices",
-          "bath_floor": "Floor heating"
+          "bath_heaters": "Bathroom radiators",
+          "bath_floor": "Floor heating",
+          "bath_schedule": "Bathroom schedule"
         }
       }
     },
     "error": {
-      "no_heaters": "Select at least one heating device.",
+      "no_heaters": "Select at least one radiator.",
       "bad_range": "The highest value must be at least the lowest value.",
-      "overlap": "A device cannot be both a heating and a cooling device.",
-      "no_bath_devices": "Select a bathroom heating device or floor heating.",
-      "bath_overlap": "Bathroom devices must not also be room devices."
+      "overlap": "A device cannot be both a radiator and an air conditioner.",
+      "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
+      "no_bath_devices": "Select a bathroom radiator or floor heating.",
+      "bath_overlap": "Bathroom devices must not also be room devices.",
+      "unknown_notify": "No such notify service."
     }
   },
   "selector": {
@@ -91,21 +137,32 @@
   },
   "entity": {
     "sensor": {
+      "house_season": {
+        "state": {
+          "waiting": "Waiting for season",
+          "heating": "Heating",
+          "cooling": "Cooling",
+          "frost_protection": "Frost protection",
+          "comfort": "Comfort"
+        }
+      },
       "room_status": {
         "state": {
-          "waiting": "Waiting for house status",
+          "waiting": "Waiting for house",
           "off": "Off",
           "frost_protection": "Frost protection",
+          "preheat": "Pre-heat",
           "comfort": "Comfort",
-          "setback": "Setback",
+          "eco": "Eco",
           "override": "Override",
           "manual": "Manual",
-          "boost": "Boost"
+          "boost": "Boost",
+          "drying": "Drying"
         }
       },
       "bath_status": {
         "state": {
-          "waiting": "Waiting for house status",
+          "waiting": "Waiting for house",
           "off": "Off",
           "frost_protection": "Frost protection",
           "bath_period": "Bathroom period",
@@ -118,8 +175,8 @@
       "boost_method": {
         "name": "Boost method",
         "state": {
-          "heaters": "Raise heating setpoints",
-          "coolers": "AC in heat mode",
+          "heaters": "Raise radiator setpoints",
+          "coolers": "A/C in heat mode",
           "both": "Both"
         }
       }

@@ -1,4 +1,4 @@
-"""Enabled and Override switches for a room."""
+"""In use and Override switches for a room."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from homeassistant.util import dt as dt_util
 from . import RoomClimateConfigEntry
 from .controller import RoomController
 from .entity import RoomClimateMixin
+from .house import HouseController
 
 
 async def async_setup_entry(
@@ -23,26 +24,28 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     ctl = entry.runtime_data
-    async_add_entities([EnabledSwitch(ctl), OverrideSwitch(ctl)])
+    if isinstance(ctl, HouseController):
+        return
+    async_add_entities([InUseSwitch(ctl), OverrideSwitch(ctl)])
 
 
-class EnabledSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
-    """Manually enable/disable the room. Disabled rooms hold frost protection."""
+class InUseSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """Whether the room is occupied. Rooms not in use hold frost protection and never cool."""
 
-    _attr_icon = "mdi:power"
+    _attr_icon = "mdi:bed"
 
     def __init__(self, ctl: RoomController) -> None:
-        super().__init__(ctl, "enabled", "Enabled")
+        super().__init__(ctl, "in_use", "In use")
 
     @property
     def is_on(self) -> bool:
-        return bool(self._ctl.values["enabled"])
+        return bool(self._ctl.values["in_use"])
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
         if last is not None and last.state in ("on", "off"):
-            self._ctl.values["enabled"] = last.state == "on"
+            self._ctl.values["in_use"] = last.state == "on"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self._set(True)
@@ -51,7 +54,7 @@ class EnabledSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         self._set(False)
 
     def _set(self, value: bool) -> None:
-        self._ctl.values["enabled"] = value
+        self._ctl.values["in_use"] = value
         self.async_write_ha_state()
         self._ctl.settings_changed()
 
