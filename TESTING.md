@@ -30,11 +30,11 @@ If WSL is already installed, check that it is version 2: `wsl -l -v` should show
 
 ### 2. Install git and uv in Ubuntu
 
-**uv** is a small tool that downloads and manages Python itself, so it works on every Ubuntu version (no PPA needed). In the **Ubuntu** terminal:
+**uv** is a small tool that downloads and manages Python itself, so it works on every Ubuntu version (no PPA needed). `build-essential` provides the C compiler that a few Home Assistant dependencies need when they install. In the **Ubuntu** terminal:
 
 ```bash
 sudo apt update
-sudo apt install -y git curl
+sudo apt install -y git curl build-essential
 curl -LsSf https://astral.sh/uv/install.sh | sh
 source ~/.bashrc
 uv --version
@@ -131,6 +131,7 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | `ModuleNotFoundError: No module named 'fcntl'` | You are running on native Windows. Use the Ubuntu (WSL) terminal. |
 | `requires a different Python: 3.12...` | The venv was made with the wrong Python. `rm -rf .venv` and repeat step 4. |
 | `Unable to locate package python3.13` | You followed an older version of this guide (apt + PPA). Use uv as in step 2 instead. |
+| `Failed to build lru-dict` … `No such file or directory: 'cc'` | No C compiler. Run `sudo apt install -y build-essential`, then repeat `uv pip install -r requirements_test.txt`. |
 | `pip: command not found` inside the venv | Expected with uv. Use `uv pip install ...`. |
 | `pytest: command not found` | The venv isn't active. Run `source .venv/bin/activate`. |
 | Install is very slow, or tests take minutes | The repo is under `/mnt/c/...`. Clone it under `~` instead. |
