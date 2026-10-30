@@ -139,6 +139,18 @@ ROOM_NUMBERS: Final = {
     "override_temp": ("Override temperature", 10.0, 32.0, 0.5, 22.0, "°C"),
     "override_minutes": ("Override duration", 0.0, 720.0, 15.0, 120.0, "min"),
 }
+DEFAULT_HEAT_PUMP_RESPONSE_SECONDS: Final = 300.0
+# Only for a House with a heat pump.
+HEAT_PUMP_NUMBERS: Final = {
+    "heat_pump_response": (
+        "Heat pump response time",
+        30.0,
+        1800.0,
+        10.0,
+        DEFAULT_HEAT_PUMP_RESPONSE_SECONDS,
+        "s",
+    ),
+}
 DEFAULT_AC_RESPONSE_SECONDS: Final = 60.0
 # Only for rooms with an A/C.
 AC_NUMBERS: Final = {
@@ -164,4 +176,5 @@ CONFIG_NUMBERS: Final = {
     "correction_max",
     "override_minutes",
     "ac_response",
+    "heat_pump_response",
 }

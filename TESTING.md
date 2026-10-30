@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-66 passed in 5.0s
+73 passed in 5.3s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -117,14 +117,14 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Area | Examples |
 |---|---|
 | Setup dialogs | house first, then room + bathroom steps, new room pre-filled from the last room's settings, overlapping devices and unknown notify services rejected, Configure for house and room, 0.2 entries refused |
-| HVAC season | computed from outdoor and reference temperatures and presence: priority order, hysteresis, change delay (and a shorter spell ignored), presence acts at once, House settings, survives a restart, waits for the outdoor sensor and holds when it is lost; heat pump turned on and never off; nobody home in heating weather turns everything off; pre-0.4 season entity still read: Heating, Cooling, Frost protection, Comfort, unavailable season or no House leaves devices alone |
+| HVAC season | computed from outdoor and reference temperatures and presence: priority order, hysteresis, heating/cooling started by the indoor temperature runs until the reference room reaches its target (and survives a restart), outdoor-started seasons end with the hysteresis, change delay (and a shorter spell ignored), presence acts at once, House settings, survives a restart, waits for the outdoor sensor and holds when it is lost; heat pump kept on and checked after its response time (re-sent, reported once, on again when switched off) and never turned off; nobody home in heating weather turns everything off; pre-0.4 season entity still read: Heating, Cooling, Frost protection, Comfort, unavailable season or no House leaves devices alone |
 | Presence and In use | nobody home in heating → frost, room not in use → frost, cooling needs in use and someone home |
 | Pre-heat | Prepare house in frost protection or while away in heating weather pre-heats rooms in use only, pre-heat and frost temperatures on the House |
 | Schedules | comfort/eco from the room schedule, A/C off outside it, bathroom schedule and floor heating |
 | Radiator correction | radiator reading high is corrected, whole 0.5 °C steps, cap, one shared correction per room, heads that copy each other (Tado room) neither ratchet nor ping-pong, copied setpoint not manual, manual change on a corrected or boosted radiator, no correction without a room sensor |
 | Floor thermostat | highest radiator setpoint across rooms and bathroom, off when nothing heats |
 | Boost | raise radiators, A/C in heat mode, both, hysteresis, configurable exit margin, select on the device |
-| A/C commands | mode → temperature → fan auto, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once (notify action or notify entity), recovered |
+| A/C commands | desired state kept, mode → temperature → fan auto, a slow temperature report waited for and not re-sent, a temperature not followed re-sent and reported once, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once (notify action or notify entity), recovered |
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
 | Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
 | Override and restart | override expiry, Resume automatic button (manual target, device turned off, override), values and override restored after a restart |

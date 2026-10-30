@@ -26,7 +26,7 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | Reference room temperature sensor | `sensor.living_room_temperature` | optional; an indoor temperature that can force heating or cooling |
 | At home entity | `input_boolean.at_home` | off: nobody is home |
 | Prepare house entity | `input_boolean.prepare_house` | optional; pre-heat or pre-cool before arrival |
-| Heat pump | `switch.heat_pump` | optional; turned on when heating or frost protection starts, never turned off (hot water) |
+| Heat pump | `switch.heat_pump` | optional; kept on while heating is needed (see [Heat pump](#heat-pump)), never turned off (hot water) |
 | Notify services | `mobile_app_my_phone` or `notify.my_group` | optional; told when an A/C does not switch mode. A notify action (mobile app) or a notify entity (e.g. a notify group helper) |
 
 ### Room (once per room)
@@ -61,6 +61,7 @@ The House works out the season from the outdoor temperature, the reference room 
 | **Comfort** | anything else |
 
 - **Hysteresis** (*Season hysteresis*, 1 °C): a season that is on keeps going until its temperature is that far back on the other side of its threshold. Heating that started below 18 °C outside lasts until it is 19 °C or warmer.
+- **Started by the indoor temperature:** heating that the reference room's temperature started keeps going until that room reaches its **own target** (comfort on schedule, eco off schedule, or a manual or override target). Cooling started that way keeps going until the room is down to its cooling target. Either way it never ends before the threshold plus the hysteresis. The reference room is the room whose *Room temperature sensor* is the House's reference sensor; without such a room, threshold plus hysteresis applies. The *Season* sensor's `started_by` attribute shows `indoor` or `outdoor`.
 - **Delay** (*Season change delay*, 30 min): a new season must be wanted for that long before it takes over; a shorter spell is ignored. Leaving or coming home acts at once.
 - An unavailable outdoor sensor keeps the current season. Until the sensor has a first value, rooms wait. After a restart the last season carries on.
 - **Heat pump:** turned on when the season becomes Heating or Frost protection, or pre-heating starts. Never turned off, because it also makes hot water.
@@ -117,13 +118,19 @@ When a room's humidity is above the House's *Drying humidity threshold* and the 
 
 ### A/C commands
 
-Every A/C command follows the same order:
+Room Climate keeps what each A/C *should* be doing (mode and temperature) and checks that it follows. Every instruction goes in the same order:
 
-1. Set the HVAC mode and wait for the A/C to report it, up to the room's **A/C response time** (default 60 s, 3–600 s). If it hasn't reported by then, send the mode once more. If that fails too, the House's notify services get a message (once, until it works again) and the mode keeps being retried every response time.
+1. Set the HVAC mode.
 2. Once the A/C reports the new mode: set the temperature.
 3. Set the fan to *auto*.
 
-Waiting does not hold up the room: radiators, bathroom and floor thermostat are driven as usual meanwhile. A late report from an A/C that is still catching up is never taken for a manual change. Slow units (LG ThinQ can take minutes) just need a longer response time.
+Each step is sent **once** and then given the room's **A/C response time** (default 60 s, 3–600 s) to show up in the A/C's state. Nothing is re-sent meanwhile. That suits LG ThinQ, which reports through slow cloud polling and refuses commands while someone uses the LG app. If the A/C still hasn't followed by then, the step is sent again. After a second miss the House's notify services get a message (once, until it works again), and it keeps being retried every response time.
+
+Waiting does not hold up the room: radiators, bathroom and floor thermostat are driven as usual meanwhile. A late report from an A/C that is still catching up is never taken for a manual change.
+
+### Heat pump
+
+While heating is needed (Heating or Frost protection season, or pre-heating), Room Climate keeps the House's heat pump **on** in the same way. It turns it on, waits the **Heat pump response time** (House device, default 5 min), and turns it on again if it isn't reported on by then. After a second miss it notifies once. If the heat pump is switched off while heating is needed, it is switched on again. It is never switched off by Room Climate, because it also makes hot water.
 
 ### Bathroom
 
@@ -154,6 +161,7 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 - *Debug log file* switch (see [Logging](#logging)).
 - *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
 - Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
+- *Heat pump response time* (5 min; only with a heat pump).
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).

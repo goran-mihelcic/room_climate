@@ -54,12 +54,18 @@ class DeviceGroup:
 
 
 @dataclass
-class _PendingMode:
-    """An A/C was asked for `mode` and has until `deadline` to report it."""
+class _Pending:
+    """An A/C was sent `want` and has until `deadline` to report following it."""
 
-    mode: str
+    want: tuple[str, float | None]  # (mode, temperature)
+    stage: str  # "mode": waiting for the mode; "settings": for temperature (and fan)
     deadline: datetime
     attempt: int
+
+
+def _describe(want: tuple[str, float | None]) -> str:
+    mode, temp = want
+    return mode if temp is None or mode == "off" else f"{mode} {temp:g} °C"
 
 
 class ClimateDriver:
@@ -78,7 +84,7 @@ class ClimateDriver:
         self._notify_targets = notify_targets
         self._ac_timeout = ac_timeout  # how long an A/C may take to report a new mode
         self._wake = wake  # asks the owner for an update cycle when that time is up
-        self._pending: dict[str, _PendingMode] = {}
+        self._pending: dict[str, _Pending] = {}
         self._timers: dict[str, CALLBACK_TYPE] = {}
         self.driving: set[str] = set()
         self._own_contexts: deque[str] = deque(maxlen=200)
@@ -120,8 +126,8 @@ class ClimateDriver:
 
         group.desired[entity_id] = (mode, temp)
 
-        if mode == "off" and group.ac and "off" in hvac_modes:
-            await self._async_ac_mode(group, entity_id, "off", hvac_modes)
+        if group.ac:
+            await self._async_drive_ac(group, entity_id, mode, temp, hvac_modes)
             return
         if mode == "off":
             if state.state == "off":
@@ -139,13 +145,7 @@ class ClimateDriver:
             return
 
         sent = False
-        if group.ac:
-            switched = await self._async_ac_mode(group, entity_id, mode, hvac_modes)
-            if switched is None:
-                return  # not in the mode yet: temperature and fan wait for confirmation
-            sent = switched
-            attrs = self.hass.states.get(entity_id).attributes
-        elif state.state != mode:
+        if state.state != mode:
             if mode not in hvac_modes:
                 _LOGGER.warning("%s: %s does not support hvac mode %s", self.name, entity_id, mode)
             else:
@@ -153,14 +153,9 @@ class ClimateDriver:
 
         current = to_float(attrs.get("temperature"))
         if temp is not None and (current is None or abs(current - temp) >= 0.05 or sent):
-            sent = (
-                await self._async_call(
-                    group, "set_temperature", {ATTR_ENTITY_ID: entity_id, "temperature": temp}
-                )
-                or sent
+            await self._async_call(
+                group, "set_temperature", {ATTR_ENTITY_ID: entity_id, "temperature": temp}
             )
-        if group.ac and sent:
-            await self._async_fan_auto(group, entity_id)
 
     async def _async_set_mode(self, group: DeviceGroup, entity_id: str, mode: str) -> bool:
         return await self._async_call(
@@ -168,63 +163,117 @@ class ClimateDriver:
         )
 
     def is_pending(self, entity_id: str) -> bool:
-        """An A/C was asked for a mode and has not reported it yet."""
+        """An A/C was sent an instruction and has not reported following it yet."""
         return entity_id in self._pending
 
-    async def _async_ac_mode(
-        self, group: DeviceGroup, entity_id: str, mode: str, hvac_modes: list[str]
-    ) -> bool | None:
-        """Put an A/C in `mode` without blocking while it is slow to report.
-
-        Returns None while the A/C is not in the mode yet, True when it has just switched
-        (temperature and fan follow now), False when it already was in the mode.
-        """
+    def _ac_follows(self, entity_id: str, mode: str, temp: float | None) -> bool:
         state = self.hass.states.get(entity_id)
-        pending = self._pending.get(entity_id)
-        if state is not None and state.state == mode:
-            if pending is None:
-                return False
-            self._confirmed(group, entity_id)
+        if state is None or state.state != mode:
+            return False
+        if mode == "off" or temp is None:
             return True
+        current = to_float(state.attributes.get("temperature"))
+        return current is not None and abs(current - temp) < 0.05
+
+    async def _async_drive_ac(
+        self,
+        group: DeviceGroup,
+        entity_id: str,
+        mode: str,
+        temp: float | None,
+        hvac_modes: list[str],
+    ) -> None:
+        """Keep an A/C on (mode, temperature) without flooding a slow cloud API.
+
+        An instruction is sent once and then given the response time to show up in the
+        A/C's state (LG polls its cloud; it also refuses commands while its app is in use).
+        Only then is it sent again; after AC_MODE_ATTEMPTS misses the notify services are
+        told once, and it keeps being retried. The order is always: mode, then (once the
+        A/C reports the mode) temperature, then fan auto.
+        """
         if mode not in hvac_modes:
             _LOGGER.warning("%s: %s does not support hvac mode %s", self.name, entity_id, mode)
-            return None
+            return
+        want = (mode, temp)
+        pending = self._pending.get(entity_id)
+        if pending is not None and pending.want != want:
+            self._clear_pending(entity_id)  # a new instruction replaces the old one: act now
+            pending = None
+        if self._ac_follows(entity_id, mode, temp):
+            if pending is not None:
+                self._confirmed(group, entity_id)
+            return
 
+        state = self.hass.states.get(entity_id)
+        mode_arrived = pending is not None and pending.stage == "mode" and state.state == mode
         now = dt_util.utcnow()
         attempt = 1
-        if pending is not None and pending.mode == mode:
+        if pending is not None and not mode_arrived:
             if now < pending.deadline:
-                return None  # still waiting for the A/C to report it
+                return  # still waiting for the A/C to report it
             _LOGGER.warning(
-                "%s: %s is %s %ss after asking for %s (attempt %d)",
+                "%s: %s has not followed %s within %ss (it is %s %s, attempt %d)",
                 self.name,
                 entity_id,
-                state.state if state else None,
+                _describe(want),
                 round(self._ac_timeout()),
-                mode,
+                state.state,
+                state.attributes.get("temperature"),
                 pending.attempt,
             )
             if pending.attempt >= AC_MODE_ATTEMPTS:
-                await self._async_report_failure(entity_id, mode)  # then keep trying
+                await self.async_report_failure(entity_id, _describe(want))  # keep trying
             else:
                 attempt = pending.attempt + 1
 
-        await self._async_set_mode(group, entity_id, mode)
-        state = self.hass.states.get(entity_id)
-        if state is not None and state.state == mode:  # reported straight away
+        stage = await self._async_send_ac(group, entity_id, mode, temp, mode_arrived)
+        if self._ac_follows(entity_id, mode, temp):
             self._confirmed(group, entity_id)
-            return True
+            return
+        if mode_arrived:
+            attempt = 1  # a new stage (temperature) gets its own attempts
         self._cancel_timer(entity_id)
         timeout = self._ac_timeout()
-        self._pending[entity_id] = _PendingMode(mode, now + timedelta(seconds=timeout), attempt)
+        self._pending[entity_id] = _Pending(want, stage, now + timedelta(seconds=timeout), attempt)
         if self._wake is not None:
             self._timers[entity_id] = async_call_later(self.hass, timeout, self._on_timeout)
-        return None
 
-    def _confirmed(self, group: DeviceGroup, entity_id: str) -> None:
+    async def _async_send_ac(
+        self,
+        group: DeviceGroup,
+        entity_id: str,
+        mode: str,
+        temp: float | None,
+        mode_arrived: bool,
+    ) -> str:
+        """Send what differs. Returns the stage now waited for: "mode" or "settings"."""
+        state = self.hass.states.get(entity_id)
+        switched = mode_arrived
+        if state.state != mode:
+            await self._async_set_mode(group, entity_id, mode)
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state != mode:
+                return "mode"  # temperature and fan wait until the A/C reports the mode
+            switched = True
+        if mode == "off":
+            return "mode"
+        current = to_float(state.attributes.get("temperature"))
+        sent = False
+        if temp is not None and (current is None or abs(current - temp) >= 0.05 or switched):
+            sent = await self._async_call(
+                group, "set_temperature", {ATTR_ENTITY_ID: entity_id, "temperature": temp}
+            )
+        if switched or sent:
+            await self._async_fan_auto(group, entity_id)
+        return "settings"
+
+    def _clear_pending(self, entity_id: str) -> None:
         self._pending.pop(entity_id, None)
         self._cancel_timer(entity_id)
-        self._failed.discard(entity_id)
+
+    def _confirmed(self, group: DeviceGroup, entity_id: str) -> None:
+        self._clear_pending(entity_id)
+        self.failure_cleared(entity_id)
         # The settling window for its echoes starts when the A/C finally reports.
         group.sent_at[entity_id] = monotonic_time.monotonic()
 
@@ -255,12 +304,16 @@ class ClimateDriver:
                 group, "set_fan_mode", {ATTR_ENTITY_ID: entity_id, "fan_mode": auto}
             )
 
-    async def _async_report_failure(self, entity_id: str, mode: str) -> None:
+    def failure_cleared(self, entity_id: str) -> None:
+        """The device followed again: a later failure is reported again."""
+        self._failed.discard(entity_id)
+
+    async def async_report_failure(self, entity_id: str, wanted: str) -> None:
         """Tell the configured notify services, once per failure episode."""
         if entity_id in self._failed:
             return
         self._failed.add(entity_id)
-        message = f"{self.name}: {entity_id} did not switch to {mode}."
+        message = f"{self.name}: {entity_id} did not switch to {wanted}."
         _LOGGER.error("%s", message)
         for target in self._notify_targets():
             name = target.removeprefix("notify.")

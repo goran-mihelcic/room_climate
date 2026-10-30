@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -26,7 +27,10 @@ from .const import (
     CONF_PREPARE,
     CONF_REFERENCE,
     CONF_SEASON,
+    CONF_TEMP_SENSOR,
+    DEFAULT_HEAT_PUMP_RESPONSE_SECONDS,
     DOMAIN,
+    HEAT_PUMP_NUMBERS,
     HOUSE_NUMBERS,
     ON_STATES,
     SEASON_COMFORT,
@@ -37,7 +41,7 @@ from .const import (
     UPDATE_INTERVAL_SECONDS,
 )
 from .debug_log import DebugFileLog
-from .driver import KIND_HEAT, ClimateDriver, DeviceGroup, to_float
+from .driver import AC_MODE_ATTEMPTS, KIND_HEAT, ClimateDriver, DeviceGroup, to_float
 
 if TYPE_CHECKING:
     from .controller import RoomController
@@ -64,6 +68,8 @@ class HouseController:
         self.hass = hass
         self.entry = entry
         self.values: dict[str, Any] = {k: v[4] for k, v in HOUSE_NUMBERS.items()}
+        if entry.options.get(CONF_HEAT_PUMP):
+            self.values.update({k: v[4] for k, v in HEAT_PUMP_NUMBERS.items()})
         self.device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
@@ -84,6 +90,11 @@ class HouseController:
         self.reference: float | None = None
         self.pending: tuple[str, datetime] | None = None  # (next season, wanted since)
         self._last_at_home: bool | None = None
+        self.indoor_started = False  # the current season was started by the indoor temperature
+        # Heat pump: when the last turn_on must show up by, and how many were sent
+        self._heat_pump_lock = asyncio.Lock()
+        self._heat_pump_deadline: datetime | None = None
+        self._heat_pump_attempt = 0
         self._running = False
         self._pump_debouncer = Debouncer(
             hass, _LOGGER, cooldown=2.0, immediate=True, function=self._async_drive_pumps
@@ -116,6 +127,11 @@ class HouseController:
                 self._rooms_update()
             self._notify()
             self._schedule_pumps()
+            self._check_heat_pump()
+
+        @callback
+        def _heat_pump_changed(_event: Event[EventStateChangedData]) -> None:
+            self._check_heat_pump()  # switched off while heating is needed: on again
 
         @callback
         def _started(_hass: HomeAssistant) -> None:
@@ -123,6 +139,10 @@ class HouseController:
             self.entry.async_on_unload(
                 async_track_state_change_event(self.hass, watched, _inputs_changed)
             )
+            if heat_pump := opts.get(CONF_HEAT_PUMP):
+                self.entry.async_on_unload(
+                    async_track_state_change_event(self.hass, [heat_pump], _heat_pump_changed)
+                )
             self.entry.async_on_unload(
                 async_track_time_interval(
                     self.hass, _tick, timedelta(seconds=UPDATE_INTERVAL_SECONDS)
@@ -162,6 +182,7 @@ class HouseController:
         self._evaluate_season()
         self._notify()
         self._rooms_update()
+        self._check_heat_pump()
 
     @callback
     def _rooms_update(self) -> None:
@@ -181,37 +202,58 @@ class HouseController:
         state = self.hass.states.get(entity_id) if entity_id else None
         return to_float(state.state) if state else None
 
+    def _reference_room_target(self) -> float | None:
+        """The current target of the room whose temperature sensor is the reference."""
+        reference = self.entry.options.get(CONF_REFERENCE)
+        for room in get_data(self.hass).rooms.values():
+            if reference and room.entry.options.get(CONF_TEMP_SENSOR) == reference:
+                return room.room_target
+        return None
+
     def _season_for(
         self, current: str | None, outdoor: float, reference: float | None, at_home: bool
-    ) -> str:
-        """The season the temperatures ask for, in priority order, with hysteresis.
+    ) -> tuple[str, bool]:
+        """The season the temperatures ask for, in priority order, and whether only the
+        indoor (reference) temperature asks for it.
 
         A season that is already on keeps going until its temperature is the hysteresis
-        back on the other side of its threshold.
+        back on the other side of its threshold. Heating or cooling that the indoor
+        temperature started keeps going until the reference room reaches its own target.
         """
         v = self.values
+        h = v["season_hysteresis"]
+        target = self._reference_room_target()
 
         def above(value: float | None, threshold: float, season: str) -> bool:
-            margin = v["season_hysteresis"] if current == season else 0.0
+            margin = h if current == season else 0.0
             return value is not None and value > threshold - margin
 
         def below(value: float | None, threshold: float, season: str) -> bool:
-            margin = v["season_hysteresis"] if current == season else 0.0
+            margin = h if current == season else 0.0
             return value is not None and value < threshold + margin
 
-        if above(outdoor, v["cool_season"], SEASON_COOL) or above(
-            reference, v["cool_indoor"], SEASON_COOL
-        ):
-            return SEASON_COOL
-        if at_home and (
-            below(outdoor, v["heat_season"], SEASON_HEAT)
-            or below(reference, v["heat_indoor"], SEASON_HEAT)
-        ):
-            return SEASON_HEAT
-        frost_margin = v["season_hysteresis"] if current == SEASON_FROST else 0.0
+        cool_out = above(outdoor, v["cool_season"], SEASON_COOL)
+        if current == SEASON_COOL and self.indoor_started:
+            stop = v["cool_indoor"] - h if target is None else min(v["cool_indoor"] - h, target)
+            cool_in = reference is not None and reference > stop
+        else:
+            cool_in = above(reference, v["cool_indoor"], SEASON_COOL)
+        if cool_out or cool_in:
+            return SEASON_COOL, not cool_out
+
+        heat_out = below(outdoor, v["heat_season"], SEASON_HEAT)
+        if current == SEASON_HEAT and self.indoor_started:
+            stop = v["heat_indoor"] + h if target is None else max(v["heat_indoor"] + h, target)
+            heat_in = reference is not None and reference < stop
+        else:
+            heat_in = below(reference, v["heat_indoor"], SEASON_HEAT)
+        if at_home and (heat_out or heat_in):
+            return SEASON_HEAT, not heat_out
+
+        frost_margin = h if current == SEASON_FROST else 0.0
         if not at_home and outdoor <= v["frost_season"] + frost_margin:
-            return SEASON_FROST
-        return SEASON_COMFORT
+            return SEASON_FROST, False
+        return SEASON_COMFORT, False
 
     @callback
     def _evaluate_season(self) -> bool:
@@ -227,9 +269,9 @@ class HouseController:
         self._last_at_home = at_home
 
         current = self.season
-        wanted = current  # an unavailable outdoor sensor holds the season
+        wanted, indoor = current, self.indoor_started  # unavailable outdoor holds the season
         if self.outdoor is not None:
-            wanted = self._season_for(current, self.outdoor, self.reference, at_home)
+            wanted, indoor = self._season_for(current, self.outdoor, self.reference, at_home)
         season = current
         if wanted == current:
             self.pending = None
@@ -239,6 +281,10 @@ class HouseController:
             self.pending = (wanted, now)
         elif now - self.pending[1] >= timedelta(minutes=v["season_delay"]):
             season, self.pending = wanted, None
+        if season != current:
+            # Remembered for the whole season: started by the indoor temperature, it runs
+            # until the reference room reaches its target.
+            self.indoor_started = indoor
 
         # Prepare house while away in heating weather: rooms in use pre-heat.
         heating_weather = self.outdoor is not None and self.outdoor < v["heat_season"]
@@ -248,7 +294,6 @@ class HouseController:
             and (season == SEASON_FROST or (season == SEASON_COMFORT and heating_weather))
         )
 
-        was_heating = self.season in (SEASON_HEAT, SEASON_FROST) or self.preheat
         changed = (season, preheat) != (self.season, self.preheat)
         self.season, self.preheat = season, preheat
         if changed:
@@ -261,23 +306,63 @@ class HouseController:
                 self.reference,
                 at_home,
             )
-        if (season in (SEASON_HEAT, SEASON_FROST) or preheat) and not was_heating:
-            self.hass.async_create_task(self._async_heat_pump_on())
         return changed
 
-    async def _async_heat_pump_on(self) -> None:
-        """Heating starts: switch the heat pump on. It is never switched off (hot water)."""
-        entity_id = self.entry.options.get(CONF_HEAT_PUMP)
-        if not entity_id:
-            return
-        domain = entity_id.split(".", 1)[0]
-        _LOGGER.info("%s: heating starts, turning on %s", self.entry.title, entity_id)
-        try:
-            await self.hass.services.async_call(
-                domain, "turn_on", {"entity_id": entity_id}, blocking=True
+    # ------------------------------------------------------------------
+    # Heat pump: kept on while heating is needed, never switched off (hot water)
+    # ------------------------------------------------------------------
+    @property
+    def heating_needed(self) -> bool:
+        return self.read_season() in (SEASON_HEAT, SEASON_FROST) or self.preheat
+
+    @callback
+    def _check_heat_pump(self) -> None:
+        if self._running and self.entry.options.get(CONF_HEAT_PUMP):
+            self.hass.async_create_task(self._async_check_heat_pump())
+
+    async def _async_check_heat_pump(self) -> None:
+        """Turn the heat pump on and check it followed, like the A/Cs.
+
+        The command is sent once and given the heat pump response time to show up (LG polls
+        its cloud and refuses commands while its app is in use). Then it is sent again;
+        after AC_MODE_ATTEMPTS misses the notify services are told once.
+        """
+        entity_id = self.entry.options[CONF_HEAT_PUMP]
+        async with self._heat_pump_lock:
+            if not self.heating_needed:
+                self._heat_pump_deadline, self._heat_pump_attempt = None, 0
+                return
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+                return
+            if state.state != "off":
+                self._heat_pump_deadline, self._heat_pump_attempt = None, 0
+                self.driver.failure_cleared(entity_id)
+                return
+            now = dt_util.utcnow()
+            if self._heat_pump_deadline is not None and now < self._heat_pump_deadline:
+                return  # still waiting for it to report on
+            if self._heat_pump_attempt >= AC_MODE_ATTEMPTS:
+                await self.driver.async_report_failure(entity_id, "on")
+                self._heat_pump_attempt = 0  # and keep trying
+            elif self._heat_pump_attempt:
+                _LOGGER.warning(
+                    "%s: %s is still off (attempt %d)",
+                    self.entry.title,
+                    entity_id,
+                    self._heat_pump_attempt,
+                )
+            self._heat_pump_attempt += 1
+            _LOGGER.info("%s: heating needed, turning on %s", self.entry.title, entity_id)
+            try:
+                await self.hass.services.async_call(
+                    entity_id.split(".", 1)[0], "turn_on", {"entity_id": entity_id}, blocking=True
+                )
+            except Exception as err:  # a missing or broken heat pump must not stop the house
+                _LOGGER.warning("%s: could not turn on %s: %s", self.entry.title, entity_id, err)
+            self._heat_pump_deadline = now + timedelta(
+                seconds=self.values.get("heat_pump_response", DEFAULT_HEAT_PUMP_RESPONSE_SECONDS)
             )
-        except Exception as err:  # a missing or broken heat pump must not stop the house
-            _LOGGER.warning("%s: could not turn on %s: %s", self.entry.title, entity_id, err)
 
     # ------------------------------------------------------------------
     # Inputs, read live so rooms never see a stale value
@@ -322,6 +407,9 @@ class HouseController:
                 "reference_temperature": self.reference,
                 "next_season": self.pending[0] if self.pending else None,
                 "next_season_since": self.pending[1].isoformat() if self.pending else None,
+                "started_by": (
+                    None if self.season is None else "indoor" if self.indoor_started else "outdoor"
+                ),
                 "preheat": self.preheat,
                 **common,
             }

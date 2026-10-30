@@ -66,6 +66,7 @@ class SeasonSensor(RoomClimateMixin, SensorEntity, RestoreEntity):
         last = await self.async_get_last_state()
         if self._ctl.computes_season and last is not None and last.state in SEASONS:
             self._ctl.season = last.state
+            self._ctl.indoor_started = last.attributes.get("started_by") == "indoor"
         self.async_on_remove(self._ctl.async_add_listener(self.async_write_ha_state))
 
     @property

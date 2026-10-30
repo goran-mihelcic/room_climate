@@ -128,7 +128,8 @@ async def house(hass: HomeAssistant, freezer):
 
     # stuck: hvac mode never changes; broken: the device's integration raises a bug;
     # linked: {a: b} copies a setpoint sent to a onto b, like heads of one Tado room
-    fake = SimpleNamespace(calls=[], notes=[], stuck=set(), broken=set(), linked={})
+    # lagging: temperature and fan commands are accepted but not reported (slow cloud polling)
+    fake = SimpleNamespace(calls=[], notes=[], stuck=set(), broken=set(), linked={}, lagging=set())
 
     async def set_hvac_mode(call):
         fake.calls.append(("set_hvac_mode", dict(call.data)))
@@ -144,6 +145,8 @@ async def house(hass: HomeAssistant, freezer):
             fake.calls.append((service, dict(call.data)))
             if call.data["entity_id"] in fake.broken:
                 raise TypeError("'>=' not supported between instances of 'NoneType' and 'int'")
+            if call.data["entity_id"] in fake.lagging:
+                return
             st = hass.states.get(call.data["entity_id"])
             hass.states.async_set(
                 call.data["entity_id"],
@@ -173,7 +176,8 @@ async def house(hass: HomeAssistant, freezer):
 
     async def heat_pump_on(call):
         fake.calls.append(("heat_pump.turn_on", {"entity_id": call.data["entity_id"]}))
-        hass.states.async_set(call.data["entity_id"], "on")
+        if call.data["entity_id"] not in fake.stuck:
+            hass.states.async_set(call.data["entity_id"], "on")
 
     # a fake input_boolean: the real switch integration is loaded and would replace a fake
     hass.services.async_register("input_boolean", "turn_on", heat_pump_on)
@@ -847,6 +851,80 @@ async def test_indoor_thresholds_force_heating_and_cooling(hass, house, freezer)
     assert _season(hass).state == "cooling"
 
 
+async def _setup_reference_is_living_room(hass, freezer) -> None:
+    """The House's reference sensor is the Living Room's own temperature sensor."""
+    await _add(hass, "House", "house", {**HOUSE_FORM, "reference_entity": TEMP})
+    await _setup(hass, freezer, with_house=False)
+
+
+async def test_indoor_heating_runs_until_the_room_target(hass, house, freezer) -> None:
+    hass.states.async_set(OUTDOOR, "22", {"device_class": "temperature"})  # mild outside
+    hass.states.async_set(TEMP, "18", {"device_class": "temperature"})  # cold inside
+    await _setup_reference_is_living_room(hass, freezer)
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["started_by"] == "indoor"
+    await _service(
+        hass, freezer, "number", "set_value", "number.living_room_comfort_temperature", value=24
+    )
+    # 22.5 °C is past threshold + hysteresis (22), but the room's target is 24 °C
+    await _set(hass, freezer, TEMP, "22.5")
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "heating"
+    await _set(hass, freezer, TEMP, "24.2")
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"
+
+
+async def test_indoor_cooling_runs_until_the_room_target(hass, house, freezer) -> None:
+    hass.states.async_set(OUTDOOR, "22", {"device_class": "temperature"})
+    hass.states.async_set(TEMP, "29.5", {"device_class": "temperature"})  # hot inside
+    await _setup_reference_is_living_room(hass, freezer)
+    assert _season(hass).state == "cooling"
+    assert _st(hass, AC) == ("cool", 25.0)
+    # 27 °C is below threshold - hysteresis (28), but the room cools to 25 °C
+    await _set(hass, freezer, TEMP, "27")
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "cooling"
+    await _set(hass, freezer, TEMP, "24.8")
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"
+
+
+async def test_outdoor_heating_ends_with_hysteresis_not_room_target(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "20", {"device_class": "temperature"})
+    await _setup_reference_is_living_room(hass, freezer)  # 10 °C outside: outdoor heating
+    assert _season(hass).attributes["started_by"] == "outdoor"
+    await _set(hass, freezer, TEMP, "22.5")
+    await _outdoor(hass, freezer, 19.5)
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"
+
+
+async def test_indoor_started_season_survives_a_restart(hass, house, freezer) -> None:
+    mock_restore_cache_with_extra_data(
+        hass,
+        [
+            (State("sensor.house_season", "heating", {"started_by": "indoor"}), {}),
+            (
+                State("number.living_room_comfort_temperature", "24"),
+                {
+                    "native_value": 24,
+                    "native_min_value": 10,
+                    "native_max_value": 28,
+                    "native_step": 0.5,
+                    "native_unit_of_measurement": "°C",
+                },
+            ),
+        ],
+    )
+    hass.states.async_set(OUTDOOR, "22", {"device_class": "temperature"})
+    hass.states.async_set(TEMP, "23", {"device_class": "temperature"})
+    await _setup_reference_is_living_room(hass, freezer)
+    await _later(hass, freezer, 61)
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["next_season"] is None
+
+
 async def test_season_thresholds_are_house_settings(hass, house, freezer) -> None:
     await _setup_computed(hass, freezer)
     await _service(
@@ -1013,6 +1091,61 @@ async def test_failure_reported_to_notify_entity(hass, house, freezer) -> None:
     assert len(sent) == 1
     assert sent[0]["entity_id"] == "notify.igoran"
     assert AC in sent[0]["message"]
+
+
+async def test_ac_temperature_waits_for_the_slow_report(hass, house, freezer) -> None:
+    """LG accepts the temperature but reports it only at its next cloud poll."""
+    hass.states.async_set(SEASON, "Cooling")
+    house.lagging.add(AC)
+    await _setup(hass, freezer)
+    assert _ac_calls(house) == ["set_hvac_mode", "set_temperature", "set_fan_mode"]
+    # within the response time nothing is sent again, though the A/C still shows 24 °C
+    await _later(hass, freezer, 30)
+    assert _ac_calls(house) == ["set_hvac_mode", "set_temperature", "set_fan_mode"]
+    # then it reports the temperature: no manual change, nothing more to send
+    await _set(hass, freezer, AC, temperature=25.0)
+    await _later(hass, freezer, 61)
+    assert _ac_calls(house) == ["set_hvac_mode", "set_temperature", "set_fan_mode"]
+    assert _attr(hass, "manual_target") is None
+    assert _status(hass) == "comfort"
+
+
+async def test_ac_temperature_resent_when_not_followed(hass, house, freezer) -> None:
+    hass.states.async_set(SEASON, "Cooling")
+    house.lagging.add(AC)  # e.g. refused while someone uses the LG app
+    await _setup(hass, freezer)
+    await _later(hass, freezer, 61)
+    assert _ac_calls(house).count("set_temperature") == 2
+    await _later(hass, freezer, 61)
+    assert _ac_calls(house).count("set_temperature") == 3
+    assert len(house.notes) == 1
+    assert "cool 25" in house.notes[0]["message"]
+
+
+async def test_heat_pump_is_kept_on_and_checked(hass, house, freezer) -> None:
+    house.stuck.add(HEAT_PUMP)  # LG: accepted, but not reported on yet
+    await _setup_computed(hass, freezer)
+    assert hass.states.get("number.house_heat_pump_response_time").state == "300.0"
+
+    def pump_calls():
+        return [c for c in house.calls if c[0] == "heat_pump.turn_on"]
+
+    assert len(pump_calls()) == 1
+    await _later(hass, freezer, 120)  # within the 5 minute response time
+    assert len(pump_calls()) == 1
+    await _later(hass, freezer, 200)
+    assert len(pump_calls()) == 2
+    assert house.notes == []
+    await _later(hass, freezer, 310)
+    assert len(pump_calls()) == 3
+    assert len(house.notes) == 1
+    assert HEAT_PUMP in house.notes[0]["message"]
+
+    # it comes on; someone switches it off while heating is needed: on again at once
+    house.stuck.clear()
+    await _set(hass, freezer, HEAT_PUMP, "on")
+    await _set(hass, freezer, HEAT_PUMP, "off")
+    assert hass.states.get(HEAT_PUMP).state == "on"
 
 
 async def test_slow_ac_does_not_hold_up_the_room(hass, house, freezer) -> None:
