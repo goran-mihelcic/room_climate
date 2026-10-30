@@ -27,6 +27,7 @@ from homeassistant.helpers.event import (
 from homeassistant.helpers.start import async_at_started
 
 from .const import (
+    AC_NUMBERS,
     BATH_NUMBERS,
     BOOST_BOTH,
     BOOST_COOLERS,
@@ -48,6 +49,7 @@ from .const import (
     CONF_SCHEDULE,
     CONF_TEMP_SENSOR,
     CORRECTION_STEP,
+    DEFAULT_AC_RESPONSE_SECONDS,
     DEFAULT_COOL_MAX,
     DEFAULT_COOL_MIN,
     DEFAULT_HEAT_MAX,
@@ -117,6 +119,8 @@ class RoomController:
         self.values["boost_method"] = BOOST_HEATERS
         if self.has_bathroom:
             self.values.update({k: v[4] for k, v in BATH_NUMBERS.items()})
+        if self.coolers.entities:
+            self.values.update({k: v[4] for k, v in AC_NUMBERS.items()})
 
         # Computed state, read by the sensors.
         self.season: str | None = None
@@ -151,7 +155,13 @@ class RoomController:
             model="Bathroom controller",
         )  # linked to the room device in __init__._async_register_devices
 
-        self.driver = ClimateDriver(hass, entry.title, self._notify_targets)
+        self.driver = ClimateDriver(
+            hass,
+            entry.title,
+            self._notify_targets,
+            ac_timeout=lambda: float(self.values.get("ac_response", DEFAULT_AC_RESPONSE_SECONDS)),
+            wake=self.request_update,
+        )
         self._listeners: list[CALLBACK_TYPE] = []
         self._last_decision: str | None = None
         self._running = False
@@ -204,6 +214,7 @@ class RoomController:
         def _stop() -> None:
             self._running = False
             self._debouncer.async_shutdown()
+            self.driver.async_shutdown()
             data.rooms.pop(self.entry.entry_id, None)
             if house := self._house():
                 house.set_pump_demand(self.entry.entry_id, None)
@@ -255,6 +266,8 @@ class RoomController:
             return
         if entity_id in self.driver.driving:
             return  # echo of a command we are sending right now
+        if self.driver.is_pending(entity_id):
+            return  # a slow A/C still catching up with our mode command
         want = group.desired.get(entity_id)
         if want is None:
             return
@@ -290,6 +303,17 @@ class RoomController:
         temp = to_float(new_state.attributes.get("temperature"))
         if temp is None or want_temp is None or abs(temp - want_temp) < 0.05:
             return
+        if any(
+            abs(temp - other) < 0.05
+            for other_id, (_mode, other) in group.desired.items()
+            if other_id != entity_id and other is not None
+        ):
+            # Devices that share a setpoint (radiators of one Tado room) copy each other's
+            # setpoint. That is the device syncing, not a person; it is re-driven as usual.
+            _LOGGER.debug(
+                "%s: %s took over another device's setpoint %.1f", self.entry.title, entity_id, temp
+            )
+            return
         if not follow:
             _LOGGER.info(
                 "%s: manual setpoint %.1f on %s blocked", self.entry.title, temp, entity_id
@@ -300,17 +324,22 @@ class RoomController:
                 "%s: setpoint %.1f on %s during boost reverted", self.entry.title, temp, entity_id
             )
             return
-        # A radiator shows target + correction; the person meant the room temperature.
-        adopted = temp - (self.corrections.get(entity_id, 0.0) if group is self.heaters else 0.0)
+        adopted = temp
+        if group is self.heaters:
+            # A radiator shows target + correction (+ boost offset while boosting);
+            # the person meant the room target, so turning it up 1 °C raises that by 1 °C.
+            adopted -= self.corrections.get(entity_id, 0.0)
+            if self.heater_setpoint is not None and self.room_target is not None:
+                adopted -= self.heater_setpoint - self.room_target
         kind = KIND_HEAT if want_mode == "heat" and group.kind != KIND_FLOOR else group.kind
         low, high = self.limits.get(kind, (None, None))
         if low is not None:
             adopted = max(low, adopted)
         if high is not None:
             adopted = min(high, adopted)
-        if group is self.heaters and self.boost:
-            # The user changed a boosted setpoint: take it as the new room target.
-            self.boost = False
+        if group is self.heaters and self.room_target is not None:
+            if abs(adopted - self.room_target) < 0.05:
+                return  # same room target as now: nothing to adopt
         _LOGGER.info(
             "%s: manual setpoint %.1f on %s adopted as %.1f until next period",
             self.entry.title,
@@ -346,27 +375,35 @@ class RoomController:
         state = self.hass.states.get(entity_id)
         return state is not None and state.state.lower() in ON_STATES
 
+    def _device_reading(self, entity_id: str) -> float | None:
+        state = self.hass.states.get(entity_id)
+        return to_float(state.attributes.get("current_temperature")) if state else None
+
     def _update_corrections(self) -> None:
-        """How much higher than the room sensor each radiator (and A/C) reads."""
+        """How much higher than the room sensor the radiators (and each A/C) read."""
+        self.corrections.clear()
         room = self.room_temperature
         if not self.entry.options.get(CONF_TEMP_SENSOR) or room is None:
-            self.corrections.clear()
             return
         cap = self.values["correction_max"]
-        for entity_id in self.heaters.entities + self.coolers.entities:
-            state = self.hass.states.get(entity_id)
-            reading = to_float(state.attributes.get("current_temperature")) if state else None
-            # Whole CORRECTION_STEPs, rounded down: never more than the difference, and
-            # nothing below one step or when the device reads lower than the room.
-            if reading is None:
-                self.corrections.pop(entity_id, None)
-                continue
-            steps = math.floor((reading - room) / CORRECTION_STEP + 1e-6)
-            correction = min(steps * CORRECTION_STEP, cap)
-            if correction > 0:
+
+        def whole_steps(excess: float) -> float:
+            # Rounded down: never more than the difference, nothing below one step.
+            steps = math.floor(excess / CORRECTION_STEP + 1e-6)
+            return min(steps * CORRECTION_STEP, cap) if steps > 0 else 0.0
+
+        # One correction for all radiators of the room: Tado X keeps a single setpoint per
+        # room and copies it between heads, so different setpoints would fight each other.
+        # A head reading lower than the room counts as 0, it never cancels another's excess.
+        readings = [self._device_reading(e) for e in self.heaters.entities]
+        excess = [max(r - room, 0.0) for r in readings if r is not None]
+        if excess and (shared := whole_steps(sum(excess) / len(excess))):
+            for entity_id in self.heaters.entities:
+                self.corrections[entity_id] = shared
+        for entity_id in self.coolers.entities:
+            reading = self._device_reading(entity_id)
+            if reading is not None and (correction := whole_steps(reading - room)):
                 self.corrections[entity_id] = correction
-            else:
-                self.corrections.pop(entity_id, None)
 
     # ------------------------------------------------------------------
     # Decision logic
@@ -512,13 +549,27 @@ class RoomController:
     def _plan(self) -> dict[str, tuple[DeviceGroup, str, float | None]]:
         """Desired (mode, setpoint) for every managed entity."""
         plan: dict[str, tuple[DeviceGroup, str, float | None]] = {}
+        # Radiators of a room get exactly the same setpoint (see _update_corrections), so
+        # they are capped at the lowest maximum among them rather than each at its own.
+        radiator_max = min(
+            (
+                high
+                for e in self.heaters.entities
+                if (st := self.hass.states.get(e))
+                and (high := to_float(st.attributes.get("max_temp"))) is not None
+            ),
+            default=None,
+        )
 
         def put(group: DeviceGroup, mode: str, temp: float | None, corrected: bool = False):
             for entity_id in group.entities:
                 if mode != "off" and entity_id in group.manual_off:
                     plan[entity_id] = (group, "off", None)
                 elif corrected and temp is not None:
-                    plan[entity_id] = (group, mode, temp + self.corrections.get(entity_id, 0.0))
+                    value = temp + self.corrections.get(entity_id, 0.0)
+                    if group is self.heaters and radiator_max is not None:
+                        value = min(value, radiator_max)
+                    plan[entity_id] = (group, mode, value)
                 else:
                     plan[entity_id] = (group, mode, temp)
 

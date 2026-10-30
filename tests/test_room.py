@@ -21,7 +21,6 @@ from pytest_homeassistant_custom_component.common import (
 )
 
 from custom_components.room_climate import controller as ctl_mod
-from custom_components.room_climate import driver as driver_mod
 from custom_components.room_climate.const import DOMAIN
 
 TRV_LR = "climate.smart_radiator_thermostat_lr"
@@ -89,7 +88,6 @@ async def house(hass: HomeAssistant, freezer):
     await hass.config.async_set_time_zone("Europe/Zagreb")
     freezer.move_to("2026-11-03 10:00:00+01:00")
     ctl_mod.COMMAND_GRACE_SECONDS = 0
-    driver_mod.AC_MODE_CHECK_SECONDS = 0
 
     for e in (THERMO, TRV_LR, TRV_DIN, TRV_BED, BATH_TRV, FLOOR):
         _climate(hass, e, "off", 15)
@@ -110,8 +108,9 @@ async def house(hass: HomeAssistant, freezer):
     hass.states.async_set(TEMP, "20.5", {"device_class": "temperature"})
     hass.states.async_set(HUMIDITY, "50", {"device_class": "humidity"})
 
-    # stuck: hvac mode never changes; broken: the device's integration raises a bug
-    fake = SimpleNamespace(calls=[], notes=[], stuck=set(), broken=set())
+    # stuck: hvac mode never changes; broken: the device's integration raises a bug;
+    # linked: {a: b} copies a setpoint sent to a onto b, like heads of one Tado room
+    fake = SimpleNamespace(calls=[], notes=[], stuck=set(), broken=set(), linked={})
 
     async def set_hvac_mode(call):
         fake.calls.append(("set_hvac_mode", dict(call.data)))
@@ -134,6 +133,13 @@ async def house(hass: HomeAssistant, freezer):
                 {**st.attributes, attribute: call.data[attribute]},
                 context=call.context,
             )
+            if (partner := fake.linked.get(call.data["entity_id"])) and attribute == "temperature":
+                # A Tado room has one mode and one setpoint: the device copies both, not
+                # with our context.
+                other = hass.states.get(partner)
+                hass.states.async_set(
+                    partner, st.state, {**other.attributes, attribute: call.data[attribute]}
+                )
 
         return handler
 
@@ -484,11 +490,12 @@ async def test_floor_thermostat_takes_highest_radiator_of_all_rooms(hass, house,
 
 async def test_radiator_reading_high_is_corrected(hass, house, freezer) -> None:
     _climate(hass, TRV_LR, "off", 15, current_temperature=22.5)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=22.5)
     await _setup(hass, freezer)
-    # TRV reads 2 °C above the room sensor -> setpoint 21 + 2
+    # radiators read 2 °C above the room sensor -> setpoint 21 + 2
     assert _st(hass, TRV_LR) == ("heat", 23.0)
-    assert _st(hass, TRV_DIN) == ("heat", 21.0)  # reads lower: no correction
-    assert _attr(hass, "radiator_corrections") == {TRV_LR: 2.0}
+    assert _st(hass, TRV_DIN) == ("heat", 23.0)
+    assert _attr(hass, "radiator_corrections") == {TRV_LR: 2.0, TRV_DIN: 2.0}
     assert _st(hass, THERMO) == ("heat", 23.0)
     # whole 0.5 °C steps, rounded down: never more than the difference
     for reading, setpoint in (
@@ -496,24 +503,80 @@ async def test_radiator_reading_high_is_corrected(hass, house, freezer) -> None:
         (21.3, 21.5),  # 0.8 -> 0.5
         (21.0, 21.5),  # exactly 0.5 -> 0.5
         (20.9, 21.0),  # 0.4: below one step, none
-        (20.0, 21.0),  # room warmer than the radiator: none
+        (20.0, 21.0),  # room warmer than the radiators: none
         (27.0, 24.0),  # 6.5 -> capped at max correction 3
     ):
-        await _set(hass, freezer, TRV_LR, current_temperature=reading)
+        for trv in (TRV_LR, TRV_DIN):
+            st = hass.states.get(trv)
+            hass.states.async_set(trv, st.state, {**st.attributes, "current_temperature": reading})
+        await _settle(hass, freezer)
         assert _st(hass, TRV_LR) == ("heat", setpoint), reading
+        assert _st(hass, TRV_DIN) == ("heat", setpoint), reading
+
+
+async def test_radiators_of_a_room_share_one_correction(hass, house, freezer) -> None:
+    # LR 2.5 °C above the room, dining 1.0 °C below (counts as 0): average 1.25 -> 1.0
+    _climate(hass, TRV_LR, "off", 15, current_temperature=23.0)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=19.5)
+    await _setup(hass, freezer)
+    assert _st(hass, TRV_LR) == ("heat", 22.0)
+    assert _st(hass, TRV_DIN) == ("heat", 22.0)
+
+
+async def test_radiators_syncing_their_setpoint_do_not_ratchet(hass, house, freezer) -> None:
+    """Tado X copies a setpoint between the heads of one room (the 29 °C bug)."""
+    house.linked.update({TRV_LR: TRV_DIN, TRV_DIN: TRV_LR})
+    _climate(hass, TRV_LR, "off", 15, current_temperature=22.5)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=23.0, max_temp=22.5)
+    await _setup(hass, freezer)
+    # one correction (average 1.75 -> 1.5), capped at the lower head's max: both 22.5
+    assert _st(hass, TRV_LR) == ("heat", 22.5)
+    assert _st(hass, TRV_DIN) == ("heat", 22.5)
+    sent = len(house.calls)
+    for _ in range(5):
+        await _settle(hass, freezer, seconds=61)
+    assert hass.states.get("sensor.living_room_target_temperature").state == "21.0"
+    assert _status(hass) == "comfort"
+    assert _attr(hass, "manual_target") is None
+    assert house.calls[sent:] == []  # no ping-pong between the heads
+
+
+async def test_setpoint_copied_from_another_head_is_not_manual(hass, house, freezer) -> None:
+    # correction 1.5 for both; dining only takes whole degrees, so 22.5 becomes 22
+    _climate(hass, TRV_LR, "off", 15, current_temperature=21.5)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=22.5, target_temp_step=1.0)
+    await _setup(hass, freezer)
+    assert _st(hass, TRV_LR) == ("heat", 22.5)
+    assert _st(hass, TRV_DIN) == ("heat", 22.0)
+    # dining reports the living room head's setpoint: a copy, not a person
+    await _set(hass, freezer, TRV_DIN, temperature=22.5)
+    assert _attr(hass, "manual_target") is None
+    assert _status(hass) == "comfort"
 
 
 async def test_manual_change_on_corrected_radiator(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "21.5", {"device_class": "temperature"})
     _climate(hass, TRV_LR, "off", 15, current_temperature=23.5)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=23.5)
     await _setup(hass, freezer)
     assert _st(hass, TRV_LR) == ("heat", 23.0)
     # someone turns the radiator up by 1 °C: the room target goes up by 1 °C
     await _set(hass, freezer, TRV_LR, temperature=24)
     assert hass.states.get("sensor.living_room_target_temperature").state == "22.0"
-    assert _st(hass, TRV_DIN) == ("heat", 22.0)
+    assert _st(hass, TRV_DIN) == ("heat", 24.0)
     assert _st(hass, TRV_LR) == ("heat", 24.0)
     assert _status(hass) == "manual"
+
+
+async def test_manual_change_on_boosted_radiator(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
+    await _setup(hass, freezer)
+    assert _st(hass, TRV_LR) == ("heat", 24.0)  # 21 + boost offset 3
+    # turned up by 2 °C during boost: the room target goes up by 2 °C, boost goes on
+    await _set(hass, freezer, TRV_LR, temperature=26)
+    assert hass.states.get("sensor.living_room_target_temperature").state == "23.0"
+    assert _st(hass, TRV_DIN) == ("heat", 26.0)
+    assert _status(hass) == "boost"
 
 
 async def test_no_correction_without_room_sensor(hass, house, freezer) -> None:
@@ -713,21 +776,61 @@ async def test_ac_command_order(hass, house, freezer) -> None:
     ]
 
 
+async def _later(hass, freezer, seconds):
+    """Let `seconds` pass in one step, then let the update cycle run."""
+    freezer.tick(timedelta(seconds=seconds))
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    await _settle(hass, freezer)
+
+
+def _ac_calls(house):
+    return [name for name, data in house.calls if data["entity_id"] == AC]
+
+
 async def test_ac_that_does_not_switch_is_retried_and_reported(hass, house, freezer) -> None:
     hass.states.async_set(SEASON, "Cooling")
     house.stuck.add(AC)
     await _setup(hass, freezer)
-    ac_calls = [name for name, data in house.calls if data["entity_id"] == AC]
-    assert ac_calls == ["set_hvac_mode", "set_hvac_mode"]  # no temperature for the wrong mode
+    response = hass.states.get("number.living_room_a_c_response_time")
+    assert response.state == "60.0"
+    assert _ac_calls(house) == ["set_hvac_mode"]  # no temperature for the wrong mode
+
+    await _later(hass, freezer, 61)  # no report within the response time: second attempt
+    assert _ac_calls(house) == ["set_hvac_mode"] * 2
+    assert house.notes == []
+    await _later(hass, freezer, 61)  # second attempt failed too: reported, and tried again
+    assert _ac_calls(house) == ["set_hvac_mode"] * 3
     assert len(house.notes) == 1
     assert AC in house.notes[0]["message"]
+    await _later(hass, freezer, 61)
+    await _later(hass, freezer, 61)
+    assert len(house.notes) == 1  # reported once per failure
 
-    # tried again next minute, but reported only once
-    await _settle(hass, freezer, seconds=61)
-    assert len(house.notes) == 1
     house.stuck.clear()
-    await _settle(hass, freezer, seconds=61)
+    await _later(hass, freezer, 61)
     assert _st(hass, AC) == ("cool", 25.0)
+    assert hass.states.get(AC).attributes["fan_mode"] == "auto"
+
+
+async def test_slow_ac_does_not_hold_up_the_room(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
+    house.stuck.add(AC)  # it switches, but reports that only later
+    await _setup(hass, freezer, has_bathroom=False)
+    await _service(
+        hass, freezer, "select", "select_option", "select.living_room_boost_method", option="both"
+    )
+    # radiators boosted at once; the A/C got its mode command and is given time
+    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    assert _ac_calls(house) == ["set_hvac_mode"]
+
+    # 40 s later the A/C reports heat, still with its old setpoint: not a manual change
+    await _later(hass, freezer, 40)
+    await _set(hass, freezer, AC, "heat")
+    assert _ac_calls(house) == ["set_hvac_mode", "set_temperature", "set_fan_mode"]
+    assert _st(hass, AC) == ("heat", 21.0)
+    assert _attr(hass, "manual_target") is None
+    assert house.notes == []
 
 
 async def test_cooling_needs_room_in_use_and_someone_home(hass, house, freezer) -> None:

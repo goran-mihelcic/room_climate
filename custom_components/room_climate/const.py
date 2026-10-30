@@ -127,6 +127,11 @@ ROOM_NUMBERS: Final = {
     "override_temp": ("Override temperature", 10.0, 32.0, 0.5, 22.0, "°C"),
     "override_minutes": ("Override duration", 0.0, 720.0, 15.0, 120.0, "min"),
 }
+DEFAULT_AC_RESPONSE_SECONDS: Final = 60.0
+# Only for rooms with an A/C.
+AC_NUMBERS: Final = {
+    "ac_response": ("A/C response time", 3.0, 600.0, 1.0, DEFAULT_AC_RESPONSE_SECONDS, "s"),
+}
 BATH_NUMBERS: Final = {
     "bath_comfort": ("Comfort temperature", 15.0, 30.0, 0.5, 24.0, "°C"),
     "bath_floor_temp": ("Floor heating temperature", 15.0, 35.0, 0.5, 27.0, "°C"),
@@ -139,4 +144,5 @@ CONFIG_NUMBERS: Final = {
     "boost_margin",
     "correction_max",
     "override_minutes",
+    "ac_response",
 }

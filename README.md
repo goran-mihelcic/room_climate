@@ -66,7 +66,11 @@ Radiator heads sit next to the radiator and read higher than the room. When a ro
 
 > room target 21 °C, sensor 20.5 °C, radiator reads 22.5 °C → radiator set to 23 °C
 
-The radiator then closes when the *room* reaches the target. The correction is the difference rounded **down** to whole 0.5 °C steps, so it is never more than the difference: 0.4 °C → none, 0.8 °C → 0.5 °C, 2.3 °C → 2 °C. It never exceeds *Max radiator correction* (default 3 °C), and a radiator that reads the same as or lower than the room gets none. The same correction applies to an A/C heating during a boost. Cooling is never corrected.
+The radiator then closes when the *room* reaches the target. The correction is the difference rounded **down** to whole 0.5 °C steps, so it is never more than the difference: 0.4 °C → none, 0.8 °C → 0.5 °C, 2.3 °C → 2 °C. It never exceeds *Max radiator correction* (default 3 °C).
+
+**All radiators of a room get one correction and exactly the same setpoint.** Tado X keeps a single setpoint per room and copies it between the heads, so different setpoints per head would fight each other. The correction is the average of how much each radiator reads above the room sensor; a radiator reading the same as or lower than the room counts as 0. The shared setpoint is capped at the lowest maximum among the room's radiators.
+
+An A/C heating during a boost gets its own correction the same way. Cooling is never corrected.
 
 ### Floor thermostat
 
@@ -92,9 +96,11 @@ When a room's humidity is above the House's *Drying humidity threshold* and the 
 
 Every A/C command follows the same order:
 
-1. Set the HVAC mode, wait 3 s, check the A/C reports it. If not, try once more. If it still hasn't switched, the House's notify services get a message (once, until it works again) and nothing more is sent.
-2. Set the temperature.
+1. Set the HVAC mode and wait for the A/C to report it, up to the room's **A/C response time** (default 60 s, 3–600 s). If it hasn't reported by then, send the mode once more. If that fails too, the House's notify services get a message (once, until it works again) and the mode keeps being retried every response time.
+2. Once the A/C reports the new mode: set the temperature.
 3. Set the fan to *auto*.
+
+Waiting does not hold up the room: radiators, bathroom and floor thermostat are driven as usual meanwhile. A late report from an A/C that is still catching up is never taken for a manual change. Slow units (LG ThinQ can take minutes) just need a longer response time.
 
 ### Bathroom
 
@@ -111,7 +117,7 @@ The *Override* switch applies the override temperature (heating or cooling) for 
 
 ## Manual changes on devices
 
-- **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
+- **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
 - **Block:** the planned temperature is restored straight away.
 - **Wrong mode** (A/C switched to cool during heating, or turned on when it should be off) is always reverted.
 
@@ -127,7 +133,7 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).
 - Controls: *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C).
-- Configuration: *Boost method* (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
+- Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**
 - *Target temperature*, *Status*, *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C).

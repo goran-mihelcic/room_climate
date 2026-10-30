@@ -8,7 +8,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import RoomClimateConfigEntry
-from .const import BATH_NUMBERS, CONFIG_NUMBERS, HOUSE_NUMBERS, ROOM_NUMBERS
+from .const import AC_NUMBERS, BATH_NUMBERS, CONFIG_NUMBERS, HOUSE_NUMBERS, ROOM_NUMBERS
 from .controller import RoomController
 from .entity import RoomClimateMixin
 from .house import HouseController
@@ -26,6 +26,8 @@ async def async_setup_entry(
         )
         return
     entities = [RoomNumber(ctl, key, spec, False) for key, spec in ROOM_NUMBERS.items()]
+    if ctl.coolers.entities:
+        entities += [RoomNumber(ctl, key, spec, False) for key, spec in AC_NUMBERS.items()]
     if ctl.has_bathroom:
         entities += [RoomNumber(ctl, key, spec, True) for key, spec in BATH_NUMBERS.items()]
     async_add_entities(entities)

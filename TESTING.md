@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-49 passed in 3.3s
+54 passed in 3.6s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -121,10 +121,10 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Presence and In use | nobody home in heating → frost, room not in use → frost, cooling needs in use and someone home |
 | Pre-heat | Prepare house in frost protection pre-heats rooms in use only, pre-heat and frost temperatures on the House |
 | Schedules | comfort/eco from the room schedule, A/C off outside it, bathroom schedule and floor heating |
-| Radiator correction | radiator reading high is corrected, hysteresis, cap, manual change on a corrected radiator, no correction without a room sensor |
+| Radiator correction | radiator reading high is corrected, whole 0.5 °C steps, cap, one shared correction per room, heads that copy each other (Tado room) neither ratchet nor ping-pong, copied setpoint not manual, manual change on a corrected or boosted radiator, no correction without a room sensor |
 | Floor thermostat | highest radiator setpoint across rooms and bathroom, off when nothing heats |
 | Boost | raise radiators, A/C in heat mode, both, hysteresis, configurable exit margin, select on the device |
-| A/C commands | mode → temperature → fan auto, mode not taken: retried, reported once, recovered |
+| A/C commands | mode → temperature → fan auto, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once, recovered |
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
 | Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
 | Override and restart | override expiry, values and override restored after a restart |

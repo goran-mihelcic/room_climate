@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import time as monotonic_time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import Context, HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Context, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers.event import async_call_later
+from homeassistant.util import dt as dt_util
+
+from .const import DEFAULT_AC_RESPONSE_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
-AC_MODE_CHECK_SECONDS = 3  # wait this long after set_hvac_mode before checking an A/C
-AC_MODE_ATTEMPTS = 2
+AC_MODE_ATTEMPTS = 2  # mode commands per failure report; retried after that, reported once
 
 KIND_HEAT = "heat"
 KIND_COOL = "cool"
@@ -50,15 +53,33 @@ class DeviceGroup:
         self.manual_off.clear()
 
 
+@dataclass
+class _PendingMode:
+    """An A/C was asked for `mode` and has until `deadline` to report it."""
+
+    mode: str
+    deadline: datetime
+    attempt: int
+
+
 class ClimateDriver:
     """Drives climate entities, remembering which state changes it caused itself."""
 
     def __init__(
-        self, hass: HomeAssistant, name: str, notify_targets: Callable[[], list[str]]
+        self,
+        hass: HomeAssistant,
+        name: str,
+        notify_targets: Callable[[], list[str]],
+        ac_timeout: Callable[[], float] = lambda: DEFAULT_AC_RESPONSE_SECONDS,
+        wake: Callable[[], None] | None = None,
     ) -> None:
         self.hass = hass
         self.name = name
         self._notify_targets = notify_targets
+        self._ac_timeout = ac_timeout  # how long an A/C may take to report a new mode
+        self._wake = wake  # asks the owner for an update cycle when that time is up
+        self._pending: dict[str, _PendingMode] = {}
+        self._timers: dict[str, CALLBACK_TYPE] = {}
         self.driving: set[str] = set()
         self._own_contexts: deque[str] = deque(maxlen=200)
         self._failed: set[str] = set()
@@ -99,6 +120,9 @@ class ClimateDriver:
 
         group.desired[entity_id] = (mode, temp)
 
+        if mode == "off" and group.ac and "off" in hvac_modes:
+            await self._async_ac_mode(group, entity_id, "off", hvac_modes)
+            return
         if mode == "off":
             if state.state == "off":
                 return
@@ -115,15 +139,17 @@ class ClimateDriver:
             return
 
         sent = False
-        if state.state != mode:
+        if group.ac:
+            switched = await self._async_ac_mode(group, entity_id, mode, hvac_modes)
+            if switched is None:
+                return  # not in the mode yet: temperature and fan wait for confirmation
+            sent = switched
+            attrs = self.hass.states.get(entity_id).attributes
+        elif state.state != mode:
             if mode not in hvac_modes:
                 _LOGGER.warning("%s: %s does not support hvac mode %s", self.name, entity_id, mode)
-                if group.ac:
-                    return
-            elif not await self._async_set_mode(group, entity_id, mode):
-                return  # A/C did not switch: don't send a temperature for the wrong mode
             else:
-                sent = True
+                sent = await self._async_set_mode(group, entity_id, mode)
 
         current = to_float(attrs.get("temperature"))
         if temp is not None and (current is None or abs(current - temp) >= 0.05 or sent):
@@ -137,27 +163,85 @@ class ClimateDriver:
             await self._async_fan_auto(group, entity_id)
 
     async def _async_set_mode(self, group: DeviceGroup, entity_id: str, mode: str) -> bool:
-        """Set the hvac mode. A/C units are checked after a pause and retried once."""
-        data = {ATTR_ENTITY_ID: entity_id, "hvac_mode": mode}
-        if not group.ac:
-            return await self._async_call(group, "set_hvac_mode", data)
-        for attempt in range(1, AC_MODE_ATTEMPTS + 1):
-            await self._async_call(group, "set_hvac_mode", data)
-            await asyncio.sleep(AC_MODE_CHECK_SECONDS)
-            state = self.hass.states.get(entity_id)
-            if state is not None and state.state == mode:
-                self._failed.discard(entity_id)
-                return True
+        return await self._async_call(
+            group, "set_hvac_mode", {ATTR_ENTITY_ID: entity_id, "hvac_mode": mode}
+        )
+
+    def is_pending(self, entity_id: str) -> bool:
+        """An A/C was asked for a mode and has not reported it yet."""
+        return entity_id in self._pending
+
+    async def _async_ac_mode(
+        self, group: DeviceGroup, entity_id: str, mode: str, hvac_modes: list[str]
+    ) -> bool | None:
+        """Put an A/C in `mode` without blocking while it is slow to report.
+
+        Returns None while the A/C is not in the mode yet, True when it has just switched
+        (temperature and fan follow now), False when it already was in the mode.
+        """
+        state = self.hass.states.get(entity_id)
+        pending = self._pending.get(entity_id)
+        if state is not None and state.state == mode:
+            if pending is None:
+                return False
+            self._confirmed(group, entity_id)
+            return True
+        if mode not in hvac_modes:
+            _LOGGER.warning("%s: %s does not support hvac mode %s", self.name, entity_id, mode)
+            return None
+
+        now = dt_util.utcnow()
+        attempt = 1
+        if pending is not None and pending.mode == mode:
+            if now < pending.deadline:
+                return None  # still waiting for the A/C to report it
             _LOGGER.warning(
-                "%s: %s is %s after asking for %s (attempt %d)",
+                "%s: %s is %s %ss after asking for %s (attempt %d)",
                 self.name,
                 entity_id,
                 state.state if state else None,
+                round(self._ac_timeout()),
                 mode,
-                attempt,
+                pending.attempt,
             )
-        await self._async_report_failure(entity_id, mode)
-        return False
+            if pending.attempt >= AC_MODE_ATTEMPTS:
+                await self._async_report_failure(entity_id, mode)  # then keep trying
+            else:
+                attempt = pending.attempt + 1
+
+        await self._async_set_mode(group, entity_id, mode)
+        state = self.hass.states.get(entity_id)
+        if state is not None and state.state == mode:  # reported straight away
+            self._confirmed(group, entity_id)
+            return True
+        self._cancel_timer(entity_id)
+        timeout = self._ac_timeout()
+        self._pending[entity_id] = _PendingMode(mode, now + timedelta(seconds=timeout), attempt)
+        if self._wake is not None:
+            self._timers[entity_id] = async_call_later(self.hass, timeout, self._on_timeout)
+        return None
+
+    def _confirmed(self, group: DeviceGroup, entity_id: str) -> None:
+        self._pending.pop(entity_id, None)
+        self._cancel_timer(entity_id)
+        self._failed.discard(entity_id)
+        # The settling window for its echoes starts when the A/C finally reports.
+        group.sent_at[entity_id] = monotonic_time.monotonic()
+
+    @callback
+    def _on_timeout(self, _now: datetime) -> None:
+        if self._wake is not None:
+            self._wake()
+
+    def _cancel_timer(self, entity_id: str) -> None:
+        if (cancel := self._timers.pop(entity_id, None)) is not None:
+            cancel()
+
+    @callback
+    def async_shutdown(self) -> None:
+        for entity_id in list(self._timers):
+            self._cancel_timer(entity_id)
+        self._pending.clear()
 
     async def _async_fan_auto(self, group: DeviceGroup, entity_id: str) -> None:
         state = self.hass.states.get(entity_id)
