@@ -186,7 +186,7 @@ class ClimateDriver:
                     {"title": "Room Climate", "message": message},
                     blocking=True,
                 )
-            except HomeAssistantError as err:
+            except Exception as err:  # a broken notifier must not stop driving devices
                 _LOGGER.warning("%s: notify.%s failed: %s", self.name, service, err)
 
     async def _async_call(self, group: DeviceGroup, service: str, data: dict[str, Any]) -> bool:
@@ -202,6 +202,15 @@ class ClimateDriver:
         except HomeAssistantError as err:
             _LOGGER.warning(
                 "%s: climate.%s failed for %s: %s", self.name, service, data[ATTR_ENTITY_ID], err
+            )
+            return False
+        except Exception:
+            # A bug in the device's integration must not stop the rest of the room.
+            _LOGGER.exception(
+                "%s: climate.%s raised an error in %s's integration",
+                self.name,
+                service,
+                data[ATTR_ENTITY_ID],
             )
             return False
         return True

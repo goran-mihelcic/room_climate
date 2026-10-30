@@ -28,6 +28,7 @@ from .const import (
     SEASON_MAP,
     UPDATE_INTERVAL_SECONDS,
 )
+from .debug_log import DebugFileLog
 from .driver import KIND_HEAT, ClimateDriver, DeviceGroup
 
 if TYPE_CHECKING:
@@ -62,6 +63,7 @@ class HouseController:
             model="House controller",
         )
         self.driver = ClimateDriver(hass, entry.title, self.notify_targets)
+        self.debug_log = DebugFileLog(hass)
         self.pumps = DeviceGroup("pumps", KIND_HEAT, [])
         # room entry_id -> {floor thermostat: highest radiator setpoint, or None}
         self._demands: dict[str, dict[str, float | None]] = {}
@@ -82,7 +84,14 @@ class HouseController:
         watched = [opts[k] for k in (CONF_AT_HOME, CONF_SEASON, CONF_PREPARE) if opts.get(k)]
 
         @callback
-        def _inputs_changed(_event: Event[EventStateChangedData]) -> None:
+        def _inputs_changed(event: Event[EventStateChangedData]) -> None:
+            new_state = event.data["new_state"]
+            _LOGGER.debug(
+                "%s: %s is now %s",
+                self.entry.title,
+                event.data["entity_id"],
+                new_state.state if new_state else None,
+            )
             self.settings_changed()
 
         @callback
@@ -165,7 +174,11 @@ class HouseController:
         return state is not None and state.state.lower() in ON_STATES
 
     def attributes(self) -> dict[str, Any]:
+        entity_id = self.entry.options.get(CONF_SEASON)
+        state = self.hass.states.get(entity_id) if entity_id else None
         return {
+            "season_entity": entity_id,
+            "season_entity_state": state.state if state else None,
             "at_home": self.read_at_home(),
             "prepare_house": self.read_prepare(),
             "floor_thermostats": dict(self.pump_targets),
@@ -200,6 +213,8 @@ class HouseController:
                     targets[thermostat] = setpoint
                 else:
                     targets.setdefault(thermostat, current)
+        if targets != self.pump_targets:
+            _LOGGER.debug("%s: floor thermostats %s", self.entry.title, targets)
         self.pump_targets = targets
         self.pumps.entities = list(targets)
         for thermostat, setpoint in targets.items():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -109,7 +110,8 @@ async def house(hass: HomeAssistant, freezer):
     hass.states.async_set(TEMP, "20.5", {"device_class": "temperature"})
     hass.states.async_set(HUMIDITY, "50", {"device_class": "humidity"})
 
-    fake = SimpleNamespace(calls=[], notes=[], stuck=set())
+    # stuck: hvac mode never changes; broken: the device's integration raises a bug
+    fake = SimpleNamespace(calls=[], notes=[], stuck=set(), broken=set())
 
     async def set_hvac_mode(call):
         fake.calls.append(("set_hvac_mode", dict(call.data)))
@@ -123,6 +125,8 @@ async def house(hass: HomeAssistant, freezer):
     def _setter(service, attribute):
         async def handler(call):
             fake.calls.append((service, dict(call.data)))
+            if call.data["entity_id"] in fake.broken:
+                raise TypeError("'>=' not supported between instances of 'NoneType' and 'int'")
             st = hass.states.get(call.data["entity_id"])
             hass.states.async_set(
                 call.data["entity_id"],
@@ -359,6 +363,43 @@ async def test_heating_on_schedule(hass, house, freezer) -> None:
     season = hass.states.get("sensor.house_season")
     assert season.state == "heating"
     assert season.attributes["floor_thermostats"] == {THERMO: 21.0}
+
+
+async def test_season_sensor_shows_source(hass, house, freezer) -> None:
+    hass.states.async_set(SEASON, "Frost Protection")
+    await _setup(hass, freezer)
+    season = hass.states.get("sensor.house_season")
+    assert season.state == "frost_protection"
+    assert season.attributes["season_entity"] == SEASON
+    assert season.attributes["season_entity_state"] == "Frost Protection"
+
+
+async def test_device_integration_error_does_not_stop_the_room(hass, house, freezer) -> None:
+    house.broken.add(TRV_LR)
+    await _setup(hass, freezer)
+    assert _st(hass, TRV_LR)[1] == 15  # its integration crashed on set_temperature
+    # everything after it in the room is still driven
+    assert _st(hass, TRV_DIN) == ("heat", 21.0)
+    assert _st(hass, BATH_TRV) == ("heat", 21.0)
+    assert _st(hass, THERMO) == ("heat", 21.0)
+
+
+async def test_debug_log_file(hass, house, freezer, tmp_path) -> None:
+    hass.config.config_dir = str(tmp_path)
+    await _setup(hass, freezer)
+    switch = "switch.house_debug_log_file"
+    assert hass.states.get(switch).state == "off"
+    await _service(hass, freezer, "switch", "turn_on", switch)
+    assert hass.states.get(switch).state == "on"
+    assert hass.states.get(switch).attributes["path"] == str(tmp_path / "room_climate.log")
+    await _set(hass, freezer, SCHEDULE, "off")
+    await _service(hass, freezer, "switch", "turn_off", switch)
+    text = await hass.async_add_executor_job((tmp_path / "room_climate.log").read_text)
+    assert "Debug log file started" in text
+    assert "Living Room: eco (heat, heating) target=19.0" in text
+    assert "climate.set_temperature" in text
+    logger = logging.getLogger("custom_components.room_climate")
+    assert logger.propagate and not logger.handlers  # Home Assistant's log is back as it was
 
 
 async def test_heating_off_schedule_uses_eco(hass, house, freezer) -> None:

@@ -18,10 +18,11 @@ custom_components/room_climate/
   house.py         HouseController (inputs, shared numbers, floor thermostats) and DomainData
   controller.py    RoomController: ALL room decision logic
   driver.py        DeviceGroup and ClimateDriver: sending commands, own-command guards, A/C sequence
+  debug_log.py     DebugFileLog: optional rotating /config/room_climate.log via a QueueListener thread
   entity.py        RoomClimateMixin: device_info, unique_id, has_entity_name
   number.py        setpoints and tuning values (RestoreNumber), house and room
   select.py        Boost method (only for rooms with an A/C)
-  switch.py        In use, Override (with expiry timer)
+  switch.py        In use, Override (with expiry timer); House: Debug log file
   sensor.py        House Season; room/bathroom Target temperature (all state as attributes) and Status
   strings.json     UI text; keep translations/en.json an identical copy
 tests/
@@ -43,7 +44,8 @@ tests/
 - **Floor thermostats** (`HouseController.set_pump_demand`): each room reports `{thermostat: highest heating setpoint of its radiators and bathroom radiators, or None}`, and withdraws its demand while waiting or on unload. The house drives each thermostat to the max over all rooms, or off when none is heating, through its own debouncer and every 60 s.
 - **Bathroom:** while the room is heating and the bathroom schedule is on, the radiators use the bathroom comfort temperature and floor heating is on; otherwise radiators follow the room target and the floor is off.
 - **Device groups** (`DeviceGroup`): heaters, coolers (`ac=True`), bath_heaters, floor; the house has a `pumps` group. Each tracks `desired` (mode, temp), `sent_at`, `manual_target`, `manual_off`, and a `period_key`. When the period key changes (regime, schedule, override, and drying for coolers), manual state is reset.
-- **Driving devices** (`ClimateDriver`): only send `set_hvac_mode` / `set_temperature` when the state differs (battery TRVs). Clamp to the device's `min_temp`/`max_temp` and round to `target_temp_step`. Devices without an `off` mode are set to `min_temp` instead. A/C units: set mode, wait `AC_MODE_CHECK_SECONDS` (3 s), check, retry once; on failure notify the house's notify services once per failure episode and send nothing else; then set temperature, then fan mode `auto`.
+- **Driving devices** (`ClimateDriver`): only send `set_hvac_mode` / `set_temperature` when the state differs (battery TRVs). Clamp to the device's `min_temp`/`max_temp` and round to `target_temp_step`. Devices without an `off` mode are set to `min_temp` instead. A/C units: set mode, wait `AC_MODE_CHECK_SECONDS` (3 s), check, retry once; on failure notify the house's notify services once per failure episode and send nothing else; then set temperature, then fan mode `auto`. `_async_call` catches *any* exception from a service call (device integrations have bugs, e.g. LG ThinQ raising `TypeError`) so one device can't stop the rest of the room.
+- **Logging:** warnings for things the owner should see, `info` for manual changes, `debug` for every command and for one decision line per room (`_log_decision`, only when it changes). The House **Debug log file** switch sends the `custom_components.room_climate` logger at debug level to its own file, turns propagation off and forwards records at the previous level to the root handlers, so HA's log is unchanged. Keep debug output useful in that file: state *why*, not just *what*.
 
 ## Manual-change detection (the subtle part)
 
@@ -84,7 +86,9 @@ Pinned versions live in `requirements_test.txt` (last verified: Home Assistant 2
 
 ## Testing notes
 
-- The `house` fixture registers fake `climate.set_hvac_mode` / `set_temperature` / `set_fan_mode` services that update the entity state **with `context=call.context`**. Keep that, or the own-command guard can't be tested. It also registers `notify.mobile_app_phone`, and returns `calls`, `notes` (notifications) and `stuck` (entities whose hvac mode won't change, for the A/C failure path).
+- The `house` fixture registers fake `climate.set_hvac_mode` / `set_temperature` / `set_fan_mode` services that update the entity state **with `context=call.context`**. Keep that, or the own-command guard can't be tested. It also registers `notify.mobile_app_phone`, and returns `calls`, `notes` (notifications), `stuck` (entities whose hvac mode won't change, for the A/C failure path) and `broken` (entities whose `set_temperature` raises `TypeError`).
+- Tests that write files set `hass.config.config_dir = str(tmp_path)` first; read files with `hass.async_add_executor_job`.
+- A second venv with the newest HA (needs Python 3.14) is at `~/rc_latest/.venv` in WSL; run the suite with both before releasing.
 - `ctl_mod.COMMAND_GRACE_SECONDS = 0` and `driver_mod.AC_MODE_CHECK_SECONDS = 0` in the fixture so manual changes are seen immediately and the A/C check doesn't sleep; time is controlled with `freezer` and `async_fire_time_changed`. Use `_settle()` after changing state so the debouncers run; `_set()` and `_service()` include it.
 - Fake devices read 15 °C by default, below the room sensor, so radiators get no correction unless a test sets `current_temperature`.
 - Entries are `MockConfigEntry(version=2, data={"type": "house" | "room"})`. `_setup()` adds the House and the "Living Room" room.

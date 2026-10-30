@@ -152,6 +152,7 @@ class RoomController:
 
         self.driver = ClimateDriver(hass, entry.title, self._notify_targets)
         self._listeners: list[CALLBACK_TYPE] = []
+        self._last_decision: str | None = None
         self._running = False
         self._debouncer = Debouncer(
             hass, _LOGGER, cooldown=2.0, immediate=False, function=self._async_apply
@@ -579,11 +580,32 @@ class RoomController:
     async def _async_apply(self) -> None:
         self._compute()
         plan = self._plan()
+        self._log_decision(plan)
         for entity_id, (group, mode, temp) in plan.items():
             await self.driver.async_drive(group, entity_id, mode, temp)
         if house := self._house():
             house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
         self._notify()
+
+    def _log_decision(self, plan: dict[str, tuple[DeviceGroup, str, float | None]]) -> None:
+        """One debug line per change of decision: why the room does what it does."""
+        if not _LOGGER.isEnabledFor(logging.DEBUG):
+            return
+        devices = {
+            entity_id: mode if temp is None else f"{mode} {temp:.1f}"
+            for entity_id, (_group, mode, temp) in plan.items()
+        }
+        decision = (
+            f"{self.room_status} ({self.regime}, {self.reason}) target={self.room_target} "
+            f"room={self.room_temperature} humidity={self.humidity} "
+            f"season={self.season} at_home={self.at_home} prepare={self.prepare} "
+            f"in_schedule={self.in_schedule} boost={self.boost} drying={self.drying} "
+            f"corrections={self.corrections} bath={self.bath_status}/{self.bath_target} "
+            f"devices={devices}"
+        )
+        if decision != self._last_decision:
+            self._last_decision = decision
+            _LOGGER.debug("%s: %s", self.entry.title, decision)
 
     # ------------------------------------------------------------------
     # Attributes for sensors

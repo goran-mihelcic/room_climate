@@ -120,7 +120,8 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 ## Entities
 
 **House device**
-- *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show presence, prepare house and each floor thermostat's setpoint.
+- *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show the season entity and its raw state, presence, prepare house and each floor thermostat's setpoint.
+- *Debug log file* switch (see [Logging](#logging)).
 - *Frost protection temperature* (12 °C), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
 
 **Room device**
@@ -131,7 +132,19 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 **Bathroom device**
 - *Target temperature*, *Status*, *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C).
 
-## Debug logging
+## Logging
+
+Room Climate logs to Home Assistant's own log (`/config/home-assistant.log`; warnings and errors also under **Settings → System → Logs**). By default that is only warnings and errors: a device that rejected a command, an A/C that did not switch, an error inside another integration.
+
+**Debug log file (recommended for debugging):** turn on **Debug log file** on the House device. Everything Room Climate does is then written at debug level to `/config/room_climate.log` (5 MB, 3 older files kept as `room_climate.log.1` …), while Home Assistant's log keeps getting only what it got before. Each room writes one line whenever its decision changes:
+
+```
+2026-10-30 07:00:02 DEBUG   [custom_components.room_climate.controller] Bedroom 1: comfort (heat, heating) target=21.0 room=19.8 humidity=58.0 season=heating at_home=True prepare=False in_schedule=True boost=False drying=False corrections={'climate.bedroom_1_trv': 1.5} bath=follow_room/21.0 devices={'climate.bedroom_1_trv': 'heat 22.5', 'climate.bedroom_1_air': 'off'}
+```
+
+plus every command sent to a device, house input changes and floor thermostat setpoints. The switch survives restarts; turn it off when done. Read the file with the File editor or Studio Code Server add-on, or over Samba/SSH.
+
+**Into Home Assistant's log instead:** **⋮ → Enable debug logging** on the integration page (a file is downloaded when you turn it off), or permanently:
 
 ```yaml
 logger:

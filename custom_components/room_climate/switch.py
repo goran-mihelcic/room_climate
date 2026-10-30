@@ -1,4 +1,4 @@
-"""In use and Override switches for a room."""
+"""In use and Override switches for a room; Debug log file for the house."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity
+from homeassistant.const import EntityCategory
 from homeassistant.core import CALLBACK_TYPE, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.event import async_track_point_in_utc_time
@@ -25,8 +26,44 @@ async def async_setup_entry(
 ) -> None:
     ctl = entry.runtime_data
     if isinstance(ctl, HouseController):
+        async_add_entities([DebugLogSwitch(ctl)])
         return
     async_add_entities([InUseSwitch(ctl), OverrideSwitch(ctl)])
+
+
+class DebugLogSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """Write everything Room Climate logs, at debug level, to its own file."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:file-document-outline"
+
+    def __init__(self, ctl: HouseController) -> None:
+        super().__init__(ctl, "debug_log", "Debug log file")
+
+    @property
+    def is_on(self) -> bool:
+        return self._ctl.debug_log.active
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"path": self._ctl.debug_log.path}
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state == "on":
+            await self._ctl.debug_log.async_enable()
+
+    async def async_will_remove_from_hass(self) -> None:
+        await self._ctl.debug_log.async_disable()
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._ctl.debug_log.async_enable()
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._ctl.debug_log.async_disable()
+        self.async_write_ha_state()
 
 
 class InUseSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
