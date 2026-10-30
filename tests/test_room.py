@@ -38,11 +38,25 @@ SCHEDULE = "schedule.living_room"
 BATH_SCHEDULE = "schedule.living_room_bathroom"
 TEMP = "sensor.living_temp"
 HUMIDITY = "sensor.living_humidity"
+OUTDOOR = "sensor.outdoor_temp"
+REFERENCE = "sensor.reference_temp"
+HEAT_PUMP = "input_boolean.heat_pump"
 
+# Before 0.4: the season comes from an entity. Most behaviour tests still use it, because
+# they set the season directly; the computed season has its own tests below.
 HOUSE_OPTIONS = {
     "season_entity": SEASON,
     "at_home_entity": AT_HOME,
     "prepare_entity": PREPARE,
+    "notify_services": ["mobile_app_phone"],
+}
+# What the House setup form asks for now: the season is computed.
+HOUSE_FORM = {
+    "outdoor_entity": OUTDOOR,
+    "reference_entity": REFERENCE,
+    "at_home_entity": AT_HOME,
+    "prepare_entity": PREPARE,
+    "heat_pump_entity": HEAT_PUMP,
     "notify_services": ["mobile_app_phone"],
 }
 ROOM_OPTIONS = {
@@ -107,6 +121,10 @@ async def house(hass: HomeAssistant, freezer):
     hass.states.async_set(BATH_SCHEDULE, "off")
     hass.states.async_set(TEMP, "20.5", {"device_class": "temperature"})
     hass.states.async_set(HUMIDITY, "50", {"device_class": "humidity"})
+    # computed season: 10 °C outside, 22 °C in the reference room -> heating when at home
+    hass.states.async_set(OUTDOOR, "10", {"device_class": "temperature"})
+    hass.states.async_set(REFERENCE, "22", {"device_class": "temperature"})
+    hass.states.async_set(HEAT_PUMP, "off")
 
     # stuck: hvac mode never changes; broken: the device's integration raises a bug;
     # linked: {a: b} copies a setpoint sent to a onto b, like heads of one Tado room
@@ -152,6 +170,13 @@ async def house(hass: HomeAssistant, freezer):
     )
     hass.services.async_register("climate", "set_fan_mode", _setter("set_fan_mode", "fan_mode"))
     hass.services.async_register("notify", "mobile_app_phone", notify)
+
+    async def heat_pump_on(call):
+        fake.calls.append(("heat_pump.turn_on", {"entity_id": call.data["entity_id"]}))
+        hass.states.async_set(call.data["entity_id"], "on")
+
+    # a fake input_boolean: the real switch integration is loaded and would replace a fake
+    hass.services.async_register("input_boolean", "turn_on", heat_pump_on)
     return fake
 
 
@@ -219,7 +244,7 @@ async def test_config_flow_house_then_room_with_bathroom(hass: HomeAssistant, ho
     assert result["step_id"] == "house"
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"],
-        {"name": "House", **HOUSE_OPTIONS, "notify_services": ["notify.mobile_app_phone"]},
+        {"name": "House", **HOUSE_FORM, "notify_services": ["notify.mobile_app_phone"]},
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"] == {"type": "house"}
@@ -249,7 +274,7 @@ async def test_config_flow_errors(hass: HomeAssistant, house) -> None:
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"name": "House", **HOUSE_OPTIONS, "notify_services": ["nope"]}
+        result["flow_id"], {"name": "House", **HOUSE_FORM, "notify_services": ["nope"]}
     )
     assert result["errors"] == {"notify_services": "unknown_notify"}
 
@@ -343,7 +368,7 @@ async def test_options_flows(hass, house, freezer) -> None:
     result = await hass.config_entries.options.async_init(house_entry.entry_id)
     assert result["step_id"] == "house"
     result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {**HOUSE_OPTIONS, "notify_services": []}
+        result["flow_id"], {**HOUSE_FORM, "notify_services": []}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
@@ -751,6 +776,154 @@ async def test_waiting_without_house(hass, house, freezer) -> None:
     assert _st(hass, TRV_LR) == ("heat", 21.0)
 
 
+# ---- computed season -----------------------------------------------------------
+
+
+async def _setup_computed(hass, freezer, **room) -> MockConfigEntry:
+    await _add(hass, "House", "house", HOUSE_FORM)
+    return await _setup(hass, freezer, with_house=False, **room)
+
+
+def _season(hass):
+    return hass.states.get("sensor.house_season")
+
+
+async def _outdoor(hass, freezer, value):
+    hass.states.async_set(OUTDOOR, str(value), {"device_class": "temperature"})
+    await _settle(hass, freezer)
+
+
+async def test_season_from_outdoor_temperature_with_delay(hass, house, freezer) -> None:
+    await _setup_computed(hass, freezer)
+    # 10 °C outside, at home: heating, and the heat pump is turned on
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["outdoor_temperature"] == 10.0
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+
+    # hot outside: cooling, but only after the 30 minute season change delay
+    await _outdoor(hass, freezer, 31)
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["next_season"] == "cooling"
+    await _later(hass, freezer, 29 * 60)
+    assert _season(hass).state == "heating"
+    await _later(hass, freezer, 2 * 60)
+    assert _season(hass).state == "cooling"
+    assert _st(hass, AC) == ("cool", 25.0)
+    assert _st(hass, TRV_LR)[0] == "off"
+    assert hass.states.get(HEAT_PUMP).state == "on"  # never turned off (hot water)
+
+
+async def test_season_hysteresis(hass, house, freezer) -> None:
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "heating"
+    # 18.5 °C is above the 18 °C heating threshold, but within the 1 °C hysteresis
+    await _outdoor(hass, freezer, 18.5)
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "heating"
+    await _outdoor(hass, freezer, 19.1)
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"
+    assert _st(hass, TRV_LR)[0] == "off"
+
+
+async def test_back_to_previous_season_cancels_the_change(hass, house, freezer) -> None:
+    await _setup_computed(hass, freezer)
+    await _outdoor(hass, freezer, 31)
+    await _later(hass, freezer, 20 * 60)
+    await _outdoor(hass, freezer, 10)  # a warm spell shorter than the delay
+    await _later(hass, freezer, 20 * 60)
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["next_season"] is None
+
+
+async def test_indoor_thresholds_force_heating_and_cooling(hass, house, freezer) -> None:
+    hass.states.async_set(OUTDOOR, "22", {"device_class": "temperature"})  # mild outside
+    hass.states.async_set(REFERENCE, "20", {"device_class": "temperature"})  # cold inside
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "heating"
+    await _set(hass, freezer, REFERENCE, "29.5")  # hot inside
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "cooling"
+
+
+async def test_season_thresholds_are_house_settings(hass, house, freezer) -> None:
+    await _setup_computed(hass, freezer)
+    await _service(
+        hass,
+        freezer,
+        "number",
+        "set_value",
+        "number.house_heating_season_temperature",
+        value=8,
+    )
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"  # 10 °C is no longer heating weather
+
+
+async def test_nobody_home_in_heating_weather_turns_everything_off(hass, house, freezer) -> None:
+    hass.states.async_set(BATH_SCHEDULE, "on")
+    await _setup_computed(hass, freezer)
+    assert _st(hass, THERMO) == ("heat", 24.0)
+    # leaving home acts at once, without the season change delay
+    await _set(hass, freezer, AT_HOME, "off")
+    assert _season(hass).state == "comfort"
+    for e in (TRV_LR, TRV_DIN, BATH_TRV, FLOOR, THERMO):
+        assert _st(hass, e)[0] == "off"
+    # and coming home too
+    await _set(hass, freezer, AT_HOME, "on")
+    assert _season(hass).state == "heating"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+
+
+async def test_frost_season_when_away_and_freezing(hass, house, freezer) -> None:
+    hass.states.async_set(AT_HOME, "off")
+    hass.states.async_set(OUTDOOR, "4", {"device_class": "temperature"})
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "frost_protection"
+    assert _st(hass, TRV_LR) == ("heat", 12.0)
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    await _outdoor(hass, freezer, 5.5)  # within the hysteresis above 5 °C
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "frost_protection"
+
+
+async def test_prepare_house_preheats_when_away_in_heating_weather(hass, house, freezer) -> None:
+    hass.states.async_set(AT_HOME, "off")
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "comfort"
+    assert _st(hass, TRV_LR)[0] == "off"
+    assert hass.states.get(HEAT_PUMP).state == "off"
+
+    await _set(hass, freezer, PREPARE, "on")
+    assert _season(hass).attributes["preheat"] is True
+    assert _st(hass, TRV_LR) == ("heat", 18.0)
+    assert _status(hass) == "preheat"
+    assert hass.states.get(HEAT_PUMP).state == "on"
+
+
+async def test_computed_season_survives_a_restart(hass, house, freezer) -> None:
+    mock_restore_cache_with_extra_data(hass, [(State("sensor.house_season", "heating"), {})])
+    hass.states.async_set(OUTDOOR, "18.5", {"device_class": "temperature"})
+    await _setup_computed(hass, freezer)
+    # within the hysteresis of the restored heating season: no change
+    assert _season(hass).state == "heating"
+    assert _season(hass).attributes["next_season"] is None
+
+
+async def test_season_waits_for_the_outdoor_sensor(hass, house, freezer) -> None:
+    hass.states.async_set(OUTDOOR, "unavailable")
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "waiting"
+    assert _status(hass) == "waiting"
+    await _outdoor(hass, freezer, 10)
+    assert _season(hass).state == "heating"  # first value: at once
+    # an unavailable sensor later holds the season
+    await _outdoor(hass, freezer, "unavailable")
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "heating"
+
+
 # ---- cooling -----------------------------------------------------------------
 
 
@@ -822,17 +995,17 @@ async def test_failure_reported_to_notify_entity(hass, house, freezer) -> None:
 
     hass.services.async_register("notify", "send_message", send_message)
     hass.states.async_set("notify.igoran", "unknown")
+    hass.states.async_set(OUTDOOR, "31", {"device_class": "temperature"})  # cooling season
 
     result = await hass.config_entries.flow.async_init(
         DOMAIN, context={"source": config_entries.SOURCE_USER}
     )
     result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {"name": "House", **HOUSE_OPTIONS, "notify_services": ["notify.igoran"]}
+        result["flow_id"], {"name": "House", **HOUSE_FORM, "notify_services": ["notify.igoran"]}
     )
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["options"]["notify_services"] == ["igoran"]
 
-    hass.states.async_set(SEASON, "Cooling")
     house.stuck.add(AC)
     await _setup(hass, freezer, with_house=False)
     await _later(hass, freezer, 61)

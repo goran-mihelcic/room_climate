@@ -3,18 +3,22 @@
     "step": {
       "house": {
         "title": "Add house",
-        "description": "The house is set up once. It holds the HVAC season, presence and the settings shared by all rooms. Add rooms afterwards.",
+        "description": "The house is set up once. It works out the HVAC season from the outdoor (and an indoor) temperature, and holds presence and the settings shared by all rooms. Add rooms afterwards.",
         "data": {
           "name": "Name",
-          "season_entity": "HVAC season entity",
+          "outdoor_entity": "Outdoor temperature sensor",
+          "reference_entity": "Reference room temperature sensor",
           "at_home_entity": "At home entity",
           "prepare_entity": "Prepare house entity",
+          "heat_pump_entity": "Heat pump",
           "notify_services": "Notify services"
         },
         "data_description": {
-          "season_entity": "States: Heating, Cooling, Comfort, Frost protection.",
-          "at_home_entity": "Off means nobody is home: heating falls back to frost protection, cooling stops.",
-          "prepare_entity": "Optional. When on, rooms in use pre-heat (frost protection season) or cool (cooling season) before arrival.",
+          "outdoor_entity": "The HVAC season (Heating, Cooling, Frost protection, Comfort) is computed from it with the season temperatures on the House device.",
+          "reference_entity": "Optional. An indoor temperature that can force heating or cooling (indoor heating and cooling thresholds).",
+          "at_home_entity": "Off means nobody is home: no heating unless it is cold enough for frost protection, cooling stops.",
+          "prepare_entity": "Optional. When on while away, rooms in use pre-heat in heating weather or cool in the cooling season before arrival.",
+          "heat_pump_entity": "Optional. Turned on when heating or frost protection starts. Never turned off (hot water).",
           "notify_services": "Optional. Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },
@@ -76,12 +80,17 @@
       "house": {
         "title": "House settings",
         "data": {
-          "season_entity": "HVAC season entity",
+          "outdoor_entity": "Outdoor temperature sensor",
+          "reference_entity": "Reference room temperature sensor",
           "at_home_entity": "At home entity",
           "prepare_entity": "Prepare house entity",
+          "heat_pump_entity": "Heat pump",
           "notify_services": "Notify services"
         },
         "data_description": {
+          "outdoor_entity": "The HVAC season is computed from it with the season temperatures on the House device. Replaces the HVAC season entity of versions before 0.4.",
+          "reference_entity": "Optional. An indoor temperature that can force heating or cooling.",
+          "heat_pump_entity": "Optional. Turned on when heating or frost protection starts. Never turned off (hot water).",
           "notify_services": "Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },

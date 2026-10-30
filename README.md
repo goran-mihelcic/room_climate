@@ -22,9 +22,11 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 
 | Field | Example | |
 |---|---|---|
-| HVAC season entity | `input_select.hvac_season` | states *Heating*, *Cooling*, *Comfort*, *Frost protection* |
+| Outdoor temperature sensor | `sensor.outdoor_temperature` | the HVAC season is computed from it (see [HVAC season](#hvac-season)) |
+| Reference room temperature sensor | `sensor.living_room_temperature` | optional; an indoor temperature that can force heating or cooling |
 | At home entity | `input_boolean.at_home` | off: nobody is home |
 | Prepare house entity | `input_boolean.prepare_house` | optional; pre-heat or pre-cool before arrival |
+| Heat pump | `switch.heat_pump` | optional; turned on when heating or frost protection starts, never turned off (hot water) |
 | Notify services | `mobile_app_my_phone` or `notify.my_group` | optional; told when an A/C does not switch mode. A notify action (mobile app) or a notify entity (e.g. a notify group helper) |
 
 ### Room (once per room)
@@ -47,16 +49,37 @@ A new room's form starts with the manual-change policy and manual limits of the 
 
 Everything can be changed later with **Configure** on the entry. Create the schedule helpers under **Settings → Devices & services → Helpers → Schedule**; they can differ per weekday.
 
+## HVAC season
+
+The House works out the season from the outdoor temperature, the reference room temperature and presence, checked in this order:
+
+| Season | When |
+|---|---|
+| **Cooling** | outdoor above *Cooling season temperature* (29 °C) **or** reference room above *Indoor cooling threshold* (29 °C) |
+| **Heating** | someone at home **and** (outdoor below *Heating season temperature* (18 °C) **or** reference room below *Indoor heating threshold* (21 °C)) |
+| **Frost protection** | nobody at home **and** outdoor at or below *Frost season temperature* (5 °C) |
+| **Comfort** | anything else |
+
+- **Hysteresis** (*Season hysteresis*, 1 °C): a season that is on keeps going until its temperature is that far back on the other side of its threshold. Heating that started below 18 °C outside lasts until it is 19 °C or warmer.
+- **Delay** (*Season change delay*, 30 min): a new season must be wanted for that long before it takes over; a shorter spell is ignored. Leaving or coming home acts at once.
+- An unavailable outdoor sensor keeps the current season. Until the sensor has a first value, rooms wait. After a restart the last season carries on.
+- **Heat pump:** turned on when the season becomes Heating or Frost protection, or pre-heating starts. Never turned off, because it also makes hot water.
+- **Nobody home in heating weather** (outdoor between the frost and heating season temperatures) is Comfort: every radiator, bathroom radiator and floor thermostat is switched off.
+
+All these temperatures are on the House device (Configuration). The *Season* sensor shows the outdoor and reference temperatures and, while a change is waiting out the delay, the next season and since when.
+
+Houses set up before 0.4 read the season from an *HVAC season entity* until an outdoor sensor is chosen under **Configure**.
+
 ## What a room does
 
 | HVAC season | Room in use | Room not in use |
 |---|---|---|
-| **Heating**, someone home | heats: comfort temperature on schedule, eco temperature off schedule; A/C off | frost protection |
-| **Heating**, nobody home | frost protection (the season should already say *Frost protection*; this is a safety net) | frost protection |
+| **Heating** | heats: comfort temperature on schedule, eco temperature off schedule; A/C off | frost protection |
 | **Frost protection** | frost protection; **pre-heat temperature** while *Prepare house* is on | frost protection |
+| **Comfort**, nobody home in heating weather, *Prepare house* on | **pre-heat temperature** | off |
 | **Cooling** | A/C cools to the cooling temperature on schedule, off outside it. Needs someone home or *Prepare house* on. Radiators off. | off |
 | **Comfort** | off | off |
-| unavailable / unknown, or no House set up | devices held as they are (status *waiting*) | same |
+| not known yet (outdoor sensor never read), or no House set up | devices held as they are (status *waiting*) | same |
 
 Frost protection and pre-heat temperatures are set on the House device and apply to every room.
 
@@ -127,9 +150,10 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 ## Entities
 
 **House device**
-- *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show the season entity and its raw state, presence, prepare house and each floor thermostat's setpoint.
+- *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show the outdoor and reference temperatures, the next season and since when, pre-heat, presence, prepare house and each floor thermostat's setpoint.
 - *Debug log file* switch (see [Logging](#logging)).
-- *Frost protection temperature* (12 °C), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
+- *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
+- Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).

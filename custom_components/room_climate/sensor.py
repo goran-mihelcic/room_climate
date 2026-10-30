@@ -8,12 +8,23 @@ from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
 from homeassistant.const import UnitOfTemperature
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from . import RoomClimateConfigEntry
-from .const import BATH_STATUSES, HOUSE_STATUSES, ROOM_STATUSES
+from .const import (
+    BATH_STATUSES,
+    HOUSE_STATUSES,
+    ROOM_STATUSES,
+    SEASON_COMFORT,
+    SEASON_COOL,
+    SEASON_FROST,
+    SEASON_HEAT,
+)
 from .controller import RoomController
 from .entity import RoomClimateMixin
 from .house import HouseController
+
+SEASONS = (SEASON_HEAT, SEASON_COOL, SEASON_FROST, SEASON_COMFORT)
 
 
 async def async_setup_entry(
@@ -37,7 +48,7 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class SeasonSensor(RoomClimateMixin, SensorEntity):
+class SeasonSensor(RoomClimateMixin, SensorEntity, RestoreEntity):
     """The HVAC season as the integration understands it, plus the floor thermostats."""
 
     _attr_device_class = SensorDeviceClass.ENUM
@@ -50,6 +61,11 @@ class SeasonSensor(RoomClimateMixin, SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        # A computed season carries on after a restart, so hysteresis and delay keep
+        # applying instead of the season being worked out from scratch.
+        last = await self.async_get_last_state()
+        if self._ctl.computes_season and last is not None and last.state in SEASONS:
+            self._ctl.season = last.state
         self.async_on_remove(self._ctl.async_add_listener(self.async_write_ha_state))
 
     @property

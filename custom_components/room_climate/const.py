@@ -13,9 +13,13 @@ TYPE_ROOM: Final = "room"
 
 # ---- House options ------------------------------------------------------
 CONF_AT_HOME: Final = "at_home_entity"
-CONF_SEASON: Final = "season_entity"
+CONF_OUTDOOR: Final = "outdoor_entity"  # outdoor temperature: the season is computed from it
+CONF_REFERENCE: Final = "reference_entity"  # indoor temperature that can force heat/cool
+CONF_HEAT_PUMP: Final = "heat_pump_entity"  # turned on when heating starts
 CONF_PREPARE: Final = "prepare_entity"
 CONF_NOTIFY: Final = "notify_services"
+# Before 0.4: the season came from this entity. Still read while no outdoor sensor is set.
+CONF_SEASON: Final = "season_entity"
 
 # ---- Room options -------------------------------------------------------
 CONF_HEATERS: Final = "heaters"
@@ -115,6 +119,14 @@ HOUSE_NUMBERS: Final = {
     "preheat": ("Pre-heat temperature", 10.0, 25.0, 0.5, 18.0, "°C"),
     "dry_humidity": ("Drying humidity threshold", 40.0, 90.0, 1.0, 65.0, "%"),
     "dry_hysteresis": ("Drying hysteresis", 1.0, 20.0, 1.0, 5.0, "%"),
+    # Season, computed from the outdoor and reference (indoor) temperatures
+    "heat_season": ("Heating season temperature", 5.0, 30.0, 0.5, 18.0, "°C"),
+    "cool_season": ("Cooling season temperature", 15.0, 40.0, 0.5, 29.0, "°C"),
+    "heat_indoor": ("Indoor heating threshold", 10.0, 28.0, 0.5, 21.0, "°C"),
+    "cool_indoor": ("Indoor cooling threshold", 20.0, 35.0, 0.5, 29.0, "°C"),
+    "frost_season": ("Frost season temperature", -20.0, 15.0, 0.5, 5.0, "°C"),
+    "season_hysteresis": ("Season hysteresis", 0.0, 5.0, 0.5, 1.0, "°C"),
+    "season_delay": ("Season change delay", 0.0, 240.0, 5.0, 30.0, "min"),
 }
 ROOM_NUMBERS: Final = {
     "heat_comfort": ("Comfort temperature", 10.0, 28.0, 0.5, 21.0, "°C"),
@@ -139,6 +151,13 @@ BATH_NUMBERS: Final = {
 # Shown under "Configuration" on the device page rather than "Controls".
 CONFIG_NUMBERS: Final = {
     "dry_hysteresis",
+    "heat_season",
+    "cool_season",
+    "heat_indoor",
+    "cool_indoor",
+    "frost_season",
+    "season_hysteresis",
+    "season_delay",
     "boost_delta",
     "boost_offset",
     "boost_margin",

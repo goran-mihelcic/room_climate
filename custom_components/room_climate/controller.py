@@ -455,6 +455,9 @@ class RoomController:
                 self.regime, self.reason = REGIME_OFF, "away"
             else:
                 self.regime, self.reason = REGIME_COOL, "cooling"
+        elif in_use and house.preheat:
+            # Away in heating weather with Prepare house on (computed season only)
+            self.regime, self.reason = REGIME_PREHEAT, "prepare_house"
         else:
             self.regime, self.reason = REGIME_OFF, "comfort_season"
 

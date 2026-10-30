@@ -23,13 +23,15 @@ from .const import (
     CONF_HAS_BATHROOM,
     CONF_HEAT_MAX,
     CONF_HEAT_MIN,
+    CONF_HEAT_PUMP,
     CONF_HEATERS,
     CONF_HUMIDITY_SENSOR,
     CONF_MANUAL_POLICY,
     CONF_NOTIFY,
+    CONF_OUTDOOR,
     CONF_PREPARE,
+    CONF_REFERENCE,
     CONF_SCHEDULE,
-    CONF_SEASON,
     CONF_TEMP_SENSOR,
     DEFAULT_COOL_MAX,
     DEFAULT_COOL_MIN,
@@ -69,9 +71,13 @@ def _entity(domain: str | list[str], device_class: str | None = None) -> sel.Ent
 
 HOUSE_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_SEASON): _entity(["input_select", "select", "sensor"]),
+        vol.Required(CONF_OUTDOOR): _entity("sensor", "temperature"),
+        vol.Optional(CONF_REFERENCE): _entity("sensor", "temperature"),
         vol.Required(CONF_AT_HOME): _entity(["input_boolean", "binary_sensor", "person", "group"]),
         vol.Optional(CONF_PREPARE): _entity(["input_boolean", "binary_sensor"]),
+        vol.Optional(CONF_HEAT_PUMP): _entity(
+            ["switch", "input_boolean", "climate", "water_heater"]
+        ),
         vol.Optional(CONF_NOTIFY): sel.TextSelector(sel.TextSelectorConfig(multiple=True)),
     }
 )

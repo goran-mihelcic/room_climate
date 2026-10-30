@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-56 passed in 4.1s
+66 passed in 5.0s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -117,9 +117,9 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Area | Examples |
 |---|---|
 | Setup dialogs | house first, then room + bathroom steps, new room pre-filled from the last room's settings, overlapping devices and unknown notify services rejected, Configure for house and room, 0.2 entries refused |
-| HVAC season | Heating, Cooling, Frost protection, Comfort; unavailable season or no House leaves devices alone |
+| HVAC season | computed from outdoor and reference temperatures and presence: priority order, hysteresis, change delay (and a shorter spell ignored), presence acts at once, House settings, survives a restart, waits for the outdoor sensor and holds when it is lost; heat pump turned on and never off; nobody home in heating weather turns everything off; pre-0.4 season entity still read: Heating, Cooling, Frost protection, Comfort, unavailable season or no House leaves devices alone |
 | Presence and In use | nobody home in heating → frost, room not in use → frost, cooling needs in use and someone home |
-| Pre-heat | Prepare house in frost protection pre-heats rooms in use only, pre-heat and frost temperatures on the House |
+| Pre-heat | Prepare house in frost protection or while away in heating weather pre-heats rooms in use only, pre-heat and frost temperatures on the House |
 | Schedules | comfort/eco from the room schedule, A/C off outside it, bathroom schedule and floor heating |
 | Radiator correction | radiator reading high is corrected, whole 0.5 °C steps, cap, one shared correction per room, heads that copy each other (Tado room) neither ratchet nor ping-pong, copied setpoint not manual, manual change on a corrected or boosted radiator, no correction without a room sensor |
 | Floor thermostat | highest radiator setpoint across rooms and bathroom, off when nothing heats |
