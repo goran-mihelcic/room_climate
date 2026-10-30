@@ -15,7 +15,7 @@
           "season_entity": "States: Heating, Cooling, Comfort, Frost protection.",
           "at_home_entity": "Off means nobody is home: heating falls back to frost protection, cooling stops.",
           "prepare_entity": "Optional. When on, rooms in use pre-heat (frost protection season) or cool (cooling season) before arrival.",
-          "notify_services": "Optional. Told when an A/C does not switch mode, e.g. mobile_app_my_phone."
+          "notify_services": "Optional. Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },
       "room": {
@@ -65,7 +65,7 @@
       "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
       "no_bath_devices": "Select a bathroom radiator or floor heating.",
       "bath_overlap": "Bathroom devices must not also be room devices.",
-      "unknown_notify": "No such notify service."
+      "unknown_notify": "No notify action or notify entity with this name."
     },
     "abort": {
       "house_exists": "The house is already set up."
@@ -82,7 +82,7 @@
           "notify_services": "Notify services"
         },
         "data_description": {
-          "notify_services": "Told when an A/C does not switch mode, e.g. mobile_app_my_phone."
+          "notify_services": "Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },
       "room": {
@@ -124,7 +124,7 @@
       "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
       "no_bath_devices": "Select a bathroom radiator or floor heating.",
       "bath_overlap": "Bathroom devices must not also be room devices.",
-      "unknown_notify": "No such notify service."
+      "unknown_notify": "No notify action or notify entity with this name."
     }
   },
   "selector": {

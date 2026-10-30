@@ -263,16 +263,18 @@ class ClimateDriver:
         message = f"{self.name}: {entity_id} did not switch to {mode}."
         _LOGGER.error("%s", message)
         for target in self._notify_targets():
-            service = target.removeprefix("notify.")
+            name = target.removeprefix("notify.")
+            if self.hass.services.has_service("notify", name):
+                # Classic notify action, e.g. notify.mobile_app_my_phone
+                service, data = name, {"title": "Room Climate", "message": message}
+            else:
+                # Notify entity, e.g. a notify group helper: notify.send_message
+                service = "send_message"
+                data = {"entity_id": f"notify.{name}", "message": f"Room Climate: {message}"}
             try:
-                await self.hass.services.async_call(
-                    "notify",
-                    service,
-                    {"title": "Room Climate", "message": message},
-                    blocking=True,
-                )
+                await self.hass.services.async_call("notify", service, data, blocking=True)
             except Exception as err:  # a broken notifier must not stop driving devices
-                _LOGGER.warning("%s: notify.%s failed: %s", self.name, service, err)
+                _LOGGER.warning("%s: notify.%s failed: %s", self.name, name, err)
 
     async def _async_call(self, group: DeviceGroup, service: str, data: dict[str, Any]) -> bool:
         _LOGGER.debug("%s: climate.%s %s", self.name, service, data)

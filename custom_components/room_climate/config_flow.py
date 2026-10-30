@@ -112,7 +112,10 @@ def _validate_house(hass: HomeAssistant, user_input: dict[str, Any]) -> dict[str
     targets = [t.strip().removeprefix("notify.") for t in user_input.get(CONF_NOTIFY) or []]
     user_input[CONF_NOTIFY] = [t for t in targets if t]
     for target in user_input[CONF_NOTIFY]:
-        if not hass.services.has_service("notify", target):
+        # A classic notify action (notify.mobile_app_x) or a notify entity (a notify group)
+        if not hass.services.has_service("notify", target) and (
+            hass.states.get(f"notify.{target}") is None
+        ):
             return {CONF_NOTIFY: "unknown_notify"}
     return {}
 

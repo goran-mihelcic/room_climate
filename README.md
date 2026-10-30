@@ -25,7 +25,7 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | HVAC season entity | `input_select.hvac_season` | states *Heating*, *Cooling*, *Comfort*, *Frost protection* |
 | At home entity | `input_boolean.at_home` | off: nobody is home |
 | Prepare house entity | `input_boolean.prepare_house` | optional; pre-heat or pre-cool before arrival |
-| Notify services | `mobile_app_my_phone` | optional; told when an A/C does not switch mode |
+| Notify services | `mobile_app_my_phone` or `notify.my_group` | optional; told when an A/C does not switch mode. A notify action (mobile app) or a notify entity (e.g. a notify group helper) |
 
 ### Room (once per room)
 

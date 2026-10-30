@@ -813,6 +813,35 @@ async def test_ac_that_does_not_switch_is_retried_and_reported(hass, house, free
     assert hass.states.get(AC).attributes["fan_mode"] == "auto"
 
 
+async def test_failure_reported_to_notify_entity(hass, house, freezer) -> None:
+    """notify.igoran is an entity (a notify group helper), not a notify action."""
+    sent = []
+
+    async def send_message(call):
+        sent.append(dict(call.data))
+
+    hass.services.async_register("notify", "send_message", send_message)
+    hass.states.async_set("notify.igoran", "unknown")
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"name": "House", **HOUSE_OPTIONS, "notify_services": ["notify.igoran"]}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["options"]["notify_services"] == ["igoran"]
+
+    hass.states.async_set(SEASON, "Cooling")
+    house.stuck.add(AC)
+    await _setup(hass, freezer, with_house=False)
+    await _later(hass, freezer, 61)
+    await _later(hass, freezer, 61)
+    assert len(sent) == 1
+    assert sent[0]["entity_id"] == "notify.igoran"
+    assert AC in sent[0]["message"]
+
+
 async def test_slow_ac_does_not_hold_up_the_room(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
     house.stuck.add(AC)  # it switches, but reports that only later
