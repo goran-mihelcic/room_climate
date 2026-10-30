@@ -952,6 +952,28 @@ async def test_manual_target_dropped_when_schedule_ends(hass, house, freezer) ->
     assert _status(hass) == "eco"
 
 
+async def test_resume_automatic_button(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "22.5", {"device_class": "temperature"})
+    await _setup(hass, freezer)
+    button = "button.living_room_resume_automatic"
+    await _set(hass, freezer, TRV_LR, temperature=23)
+    await _set(hass, freezer, TRV_DIN, "off")
+    assert _status(hass) == "manual"
+    assert _st(hass, TRV_DIN)[0] == "off"
+
+    await _service(hass, freezer, "button", "press", button)
+    for e in (TRV_LR, TRV_DIN):
+        assert _st(hass, e) == ("heat", 21.0)
+    assert _status(hass) == "comfort"
+
+    # ends an override as well
+    await _service(hass, freezer, "switch", "turn_on", "switch.living_room_override")
+    assert _st(hass, TRV_LR) == ("heat", 22.0)
+    await _service(hass, freezer, "button", "press", button)
+    assert hass.states.get("switch.living_room_override").state == "off"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+
+
 async def test_radiator_turned_off_manually_is_respected(hass, house, freezer) -> None:
     await _setup(hass, freezer)
     await _set(hass, freezer, TRV_DIN, "off")

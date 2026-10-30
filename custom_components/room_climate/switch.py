@@ -116,6 +116,7 @@ class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
+        self._ctl.end_override = self._end  # used by the Resume automatic button
         last = await self.async_get_last_state()
         if last is None or last.state != "on":
             return
@@ -128,6 +129,7 @@ class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         self._schedule_expiry(until)
 
     async def async_will_remove_from_hass(self) -> None:
+        self._ctl.end_override = None
         self._cancel_expiry()
 
     async def async_turn_on(self, **kwargs: Any) -> None:

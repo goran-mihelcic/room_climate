@@ -163,6 +163,7 @@ class RoomController:
             wake=self.request_update,
         )
         self._listeners: list[CALLBACK_TYPE] = []
+        self.end_override: Callable[[], None] | None = None  # set by the Override switch
         self._last_decision: str | None = None
         self._running = False
         self._debouncer = Debouncer(
@@ -248,6 +249,14 @@ class RoomController:
         for group in self.groups:
             group.reset_manual()
         self.request_update()
+
+    @callback
+    def resume_automatic(self) -> None:
+        """Back to the schedule: drop manual targets and devices turned off, end override."""
+        _LOGGER.info("%s: back to automatic control", self.entry.title)
+        if self.values["override"] and self.end_override is not None:
+            self.end_override()  # also calls settings_changed
+        self.settings_changed()
 
     # ------------------------------------------------------------------
     # Manual change detection

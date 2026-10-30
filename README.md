@@ -118,7 +118,8 @@ The *Override* switch applies the override temperature (heating or cooling) for 
 ## Manual changes on devices
 
 - **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
-- **Block:** the planned temperature is restored straight away.
+- **Block:** the planned temperature is restored straight away, and a device switched off by hand is switched back on. Choose it per room under **Configure → Manual changes** to keep a room out of manual mode entirely.
+- **Resume automatic** (button on the room device): drops manual targets in the room and its bathroom, switches devices turned off by hand back on and ends an override. The room follows its schedule again at once.
 - **Wrong mode** (A/C switched to cool during heating, or turned on when it should be off) is always reverted.
 
 Commands sent by the integration carry their own context and devices get a 45 s settling window, so a device reporting a command back is never mistaken for a manual change.
@@ -132,7 +133,7 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).
-- Controls: *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C).
+- Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C).
 - Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**

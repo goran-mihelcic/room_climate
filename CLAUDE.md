@@ -23,6 +23,7 @@ custom_components/room_climate/
   number.py        setpoints and tuning values (RestoreNumber), house and room
   select.py        Boost method (only for rooms with an A/C)
   switch.py        In use, Override (with expiry timer); House: Debug log file
+  button.py        Resume automatic (room): drop manual state, end override
   sensor.py        House Season; room/bathroom Target temperature (all state as attributes) and Status
   strings.json     UI text; keep translations/en.json an identical copy
 tests/
@@ -55,7 +56,7 @@ Someone changing a setpoint on a remote or thermostat is detected in `_check_man
 2. `driver.driving` holds entities currently being commanded, and `driver.is_pending()` A/Cs that have not reported a mode command yet (their late reports are never manual; the settling window starts when they confirm).
 3. `sent_at` is stamped **before** the call; reports within `COMMAND_GRACE_SECONDS` (45 s) are ignored. Slow Zigbee/Matter devices echo late.
 
-A reported setpoint equal to another device's desired setpoint in the same group is a device copying it (Tado room sync), never a manual change. Policy `follow` adopts the new setpoint for the whole room (minus the radiator's correction and, while radiators are boosted, the boost offset), clamped to the configured manual limits, until the next period change; a result equal to the current room target is ignored. `_check_manual_change` judges the event's `new_state`, not the current state: reading the current state lost real remote changes when an update ran between the event and the listener. Policy `block` restores immediately. A wrong mode (e.g. A/C switched to cool in heating season) is always reverted. A/C setpoint changes during an A/C heat boost are reverted, never adopted. Manual setpoints only count in `heat` and `cool`; in frost and pre-heat they are restored. Floor thermostats have no manual handling; they are re-driven.
+A reported setpoint equal to another device's desired setpoint in the same group is a device copying it (Tado room sync), never a manual change. Policy `follow` adopts the new setpoint for the whole room (minus the radiator's correction and, while radiators are boosted, the boost offset), clamped to the configured manual limits, until the next period change; a result equal to the current room target is ignored. `_check_manual_change` judges the event's `new_state`, not the current state: reading the current state lost real remote changes when an update ran between the event and the listener. Policy `block` restores immediately. A wrong mode (e.g. A/C switched to cool in heating season) is always reverted. A/C setpoint changes during an A/C heat boost are reverted, never adopted. Manual setpoints only count in `heat` and `cool`; in frost and pre-heat they are restored. Floor thermostats have no manual handling; they are re-driven. The *Resume automatic* button calls `resume_automatic()`: `settings_changed()` plus ending an override through `end_override`, which the Override switch registers (it owns the expiry timer).
 
 ## Commands
 
