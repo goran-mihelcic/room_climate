@@ -16,7 +16,8 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.event import async_call_later
 from homeassistant.util import dt as dt_util
 
-from .const import DEFAULT_AC_RESPONSE_SECONDS
+from .command_queue import async_queued_call
+from .const import DEFAULT_AC_RESPONSE_SECONDS, DEFAULT_COMMAND_PAUSE_SECONDS
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -78,10 +79,12 @@ class ClimateDriver:
         notify_targets: Callable[[], list[str]],
         ac_timeout: Callable[[], float] = lambda: DEFAULT_AC_RESPONSE_SECONDS,
         wake: Callable[[], None] | None = None,
+        command_pause: Callable[[], float] = lambda: DEFAULT_COMMAND_PAUSE_SECONDS,
     ) -> None:
         self.hass = hass
         self.name = name
         self._notify_targets = notify_targets
+        self._command_pause = command_pause  # between commands to one cloud integration
         self._ac_timeout = ac_timeout  # how long an A/C may take to report a new mode
         self._wake = wake  # asks the owner for an update cycle when that time is up
         self._pending: dict[str, _Pending] = {}
@@ -336,8 +339,14 @@ class ClimateDriver:
         context = Context()
         self._own_contexts.append(context.id)
         try:
-            await self.hass.services.async_call(
-                "climate", service, data, blocking=True, context=context
+            await async_queued_call(
+                self.hass,
+                data[ATTR_ENTITY_ID],
+                "climate",
+                service,
+                data,
+                self._command_pause(),
+                context,
             )
         except HomeAssistantError as err:
             _LOGGER.warning(

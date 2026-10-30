@@ -15,7 +15,8 @@ TYPE_ROOM: Final = "room"
 CONF_AT_HOME: Final = "at_home_entity"
 CONF_OUTDOOR: Final = "outdoor_entity"  # outdoor temperature: the season is computed from it
 CONF_REFERENCE: Final = "reference_entity"  # indoor temperature that can force heat/cool
-CONF_HEAT_PUMP: Final = "heat_pump_entity"  # turned on when heating starts
+CONF_HEAT_PUMP: Final = "heat_pump_entity"  # heating while heating is needed, else off
+CONF_HOT_WATER: Final = "hot_water_entity"  # on while someone is home (or prepare house)
 CONF_PREPARE: Final = "prepare_entity"
 CONF_NOTIFY: Final = "notify_services"
 # Before 0.4: the season came from this entity. Still read while no outdoor sensor is set.
@@ -127,6 +128,13 @@ HOUSE_NUMBERS: Final = {
     "frost_season": ("Frost season temperature", -20.0, 15.0, 0.5, 5.0, "°C"),
     "season_hysteresis": ("Season hysteresis", 0.0, 5.0, 0.5, 1.0, "°C"),
     "season_delay": ("Season change delay", 0.0, 240.0, 5.0, 30.0, "min"),
+    # Pause between two commands to the same cloud integration (LG ThinQ)
+    "command_pause": ("Cloud command pause", 0.0, 30.0, 1.0, 5.0, "s"),
+}
+DEFAULT_COMMAND_PAUSE_SECONDS: Final = 5.0
+# Only for a House with hot water.
+HOT_WATER_NUMBERS: Final = {
+    "hot_water_temp": ("Hot water temperature", 30.0, 65.0, 1.0, 45.0, "°C"),
 }
 ROOM_NUMBERS: Final = {
     "heat_comfort": ("Comfort temperature", 10.0, 28.0, 0.5, 21.0, "°C"),
@@ -140,7 +148,7 @@ ROOM_NUMBERS: Final = {
     "override_minutes": ("Override duration", 0.0, 720.0, 15.0, 120.0, "min"),
 }
 DEFAULT_HEAT_PUMP_RESPONSE_SECONDS: Final = 300.0
-# Only for a House with a heat pump.
+# Only for a House with a heat pump or hot water (the same LG unit).
 HEAT_PUMP_NUMBERS: Final = {
     "heat_pump_response": (
         "Heat pump response time",
@@ -177,4 +185,5 @@ CONFIG_NUMBERS: Final = {
     "override_minutes",
     "ac_response",
     "heat_pump_response",
+    "command_pause",
 }

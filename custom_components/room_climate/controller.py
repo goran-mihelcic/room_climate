@@ -50,6 +50,7 @@ from .const import (
     CONF_TEMP_SENSOR,
     CORRECTION_STEP,
     DEFAULT_AC_RESPONSE_SECONDS,
+    DEFAULT_COMMAND_PAUSE_SECONDS,
     DEFAULT_COOL_MAX,
     DEFAULT_COOL_MIN,
     DEFAULT_HEAT_MAX,
@@ -161,6 +162,7 @@ class RoomController:
             self._notify_targets,
             ac_timeout=lambda: float(self.values.get("ac_response", DEFAULT_AC_RESPONSE_SECONDS)),
             wake=self.request_update,
+            command_pause=self._command_pause,
         )
         self._listeners: list[CALLBACK_TYPE] = []
         self.end_override: Callable[[], None] | None = None  # set by the Override switch
@@ -177,6 +179,10 @@ class RoomController:
 
     def _house(self) -> HouseController | None:
         return get_data(self.hass).house
+
+    def _command_pause(self) -> float:
+        house = self._house()
+        return float(house.values["command_pause"]) if house else DEFAULT_COMMAND_PAUSE_SECONDS
 
     def _notify_targets(self) -> list[str]:
         house = self._house()

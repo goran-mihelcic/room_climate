@@ -11,6 +11,7 @@
           "at_home_entity": "At home entity",
           "prepare_entity": "Prepare house entity",
           "heat_pump_entity": "Heat pump",
+          "hot_water_entity": "Hot water",
           "notify_services": "Notify services"
         },
         "data_description": {
@@ -18,7 +19,8 @@
           "reference_entity": "Optional. An indoor temperature that can force heating or cooling (indoor heating and cooling thresholds).",
           "at_home_entity": "Off means nobody is home: no heating unless it is cold enough for frost protection, cooling stops.",
           "prepare_entity": "Optional. When on while away, rooms in use pre-heat in heating weather or cool in the cooling season before arrival.",
-          "heat_pump_entity": "Optional. Turned on when heating or frost protection starts. Never turned off (hot water).",
+          "heat_pump_entity": "Optional. Set to heat while heating, frost protection or pre-heat needs it, and off otherwise. A climate entity is switched with its HVAC mode (heat / off).",
+          "hot_water_entity": "Optional. On at the hot water temperature (House device) while someone is home or Prepare house is on, off otherwise.",
           "notify_services": "Optional. Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },
@@ -85,12 +87,14 @@
           "at_home_entity": "At home entity",
           "prepare_entity": "Prepare house entity",
           "heat_pump_entity": "Heat pump",
+          "hot_water_entity": "Hot water",
           "notify_services": "Notify services"
         },
         "data_description": {
           "outdoor_entity": "The HVAC season is computed from it with the season temperatures on the House device. Replaces the HVAC season entity of versions before 0.4.",
           "reference_entity": "Optional. An indoor temperature that can force heating or cooling.",
-          "heat_pump_entity": "Optional. Turned on when heating or frost protection starts. Never turned off (hot water).",
+          "heat_pump_entity": "Optional. Set to heat while heating, frost protection or pre-heat needs it, and off otherwise. A climate entity is switched with its HVAC mode (heat / off).",
+          "hot_water_entity": "Optional. On at the hot water temperature (House device) while someone is home or Prepare house is on, off otherwise.",
           "notify_services": "Told when an A/C does not switch mode: a notify action such as mobile_app_my_phone, or a notify entity such as notify.my_group."
         }
       },

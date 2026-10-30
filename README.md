@@ -26,7 +26,8 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | Reference room temperature sensor | `sensor.living_room_temperature` | optional; an indoor temperature that can force heating or cooling |
 | At home entity | `input_boolean.at_home` | off: nobody is home |
 | Prepare house entity | `input_boolean.prepare_house` | optional; pre-heat or pre-cool before arrival |
-| Heat pump | `switch.heat_pump` | optional; kept on while heating is needed (see [Heat pump](#heat-pump)), never turned off (hot water) |
+| Heat pump | `climate.heat_pump` | optional; heating while heating is needed, off otherwise (see [Heat pump](#heat-pump)) |
+| Hot water | `water_heater.hot_water` | optional; on at the hot water temperature while someone is home or *Prepare house* is on, off otherwise (see [Hot water](#hot-water)) |
 | Notify services | `mobile_app_my_phone` or `notify.my_group` | optional; told when an A/C does not switch mode. A notify action (mobile app) or a notify entity (e.g. a notify group helper) |
 
 ### Room (once per room)
@@ -64,7 +65,7 @@ The House works out the season from the outdoor temperature, the reference room 
 - **Started by the indoor temperature:** heating that the reference room's temperature started keeps going until that room reaches its **own target** (comfort on schedule, eco off schedule, or a manual or override target). Cooling started that way keeps going until the room is down to its cooling target. Either way it never ends before the threshold plus the hysteresis. The reference room is the room whose *Room temperature sensor* is the House's reference sensor; without such a room, threshold plus hysteresis applies. The *Season* sensor's `started_by` attribute shows `indoor` or `outdoor`.
 - **Delay** (*Season change delay*, 30 min): a new season must be wanted for that long before it takes over; a shorter spell is ignored. Leaving or coming home acts at once.
 - An unavailable outdoor sensor keeps the current season. Until the sensor has a first value, rooms wait. After a restart the last season carries on.
-- **Heat pump:** turned on when the season becomes Heating or Frost protection, or pre-heating starts. Never turned off, because it also makes hot water.
+- **Heat pump:** heating while the season is Heating or Frost protection, or pre-heating runs; off otherwise (see [Heat pump](#heat-pump)).
 - **Nobody home in heating weather** (outdoor between the frost and heating season temperatures) is Comfort: every radiator, bathroom radiator and floor thermostat is switched off.
 
 All these temperatures are on the House device (Configuration). The *Season* sensor shows the outdoor and reference temperatures and, while a change is waiting out the delay, the next season and since when.
@@ -130,7 +131,17 @@ Waiting does not hold up the room: radiators, bathroom and floor thermostat are 
 
 ### Heat pump
 
-While heating is needed (Heating or Frost protection season, or pre-heating), Room Climate keeps the House's heat pump **on** in the same way. It turns it on, waits the **Heat pump response time** (House device, default 5 min), and turns it on again if it isn't reported on by then. After a second miss it notifies once. If the heat pump is switched off while heating is needed, it is switched on again. It is never switched off by Room Climate, because it also makes hot water.
+Room Climate keeps the House's heat pump **heating while heating is needed** (Heating or Frost protection season, or pre-heating) and **off otherwise** (Comfort or Cooling, once the season has changed; at start-up, before the season is known, it is left alone). A `climate` heat pump is set with its HVAC mode, `heat` or `off`, and must report exactly that: `climate.turn_on` could bring back an old `cool` mode. Other heat pump entities (switch, input_boolean) are turned on or off.
+
+Like the A/Cs, each command is sent once and given the **Heat pump response time** (House device, default 5 min) to show up in the heat pump's state, then sent again; after a second miss the notify services are told once. A change made by hand the other way is undone.
+
+### Hot water
+
+The House's hot water (an LG `water_heater`) is **on** at the *Hot water temperature* (House device, default 45 °C) while someone is home or *Prepare house* is on, so the water is warm on arrival, and **off** while nobody is home, all year round. It is switched on first and given the temperature once it reports on, and checked like the heat pump: same *Heat pump response time*, re-sent, one notification after two misses, changes by hand undone.
+
+### Cloud command queue
+
+Commands to devices of a **cloud** integration (LG ThinQ) go out **one at a time**, from every room and the House alike, with the House's *Cloud command pause* (default 5 s) between them. LG rejects a request while it is still handling another one, so A/Cs, heat pump and hot water no longer step on each other. Devices of local integrations (Matter, Zigbee) are not queued.
 
 ### Bathroom
 
@@ -161,7 +172,7 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 - *Debug log file* switch (see [Logging](#logging)).
 - *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
 - Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
-- *Heat pump response time* (5 min; only with a heat pump).
+- *Heat pump response time* (5 min; with a heat pump or hot water), *Hot water temperature* (45 °C; with hot water), *Cloud command pause* (5 s).
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).

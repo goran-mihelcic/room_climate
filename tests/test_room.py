@@ -20,6 +20,7 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
+from custom_components.room_climate import command_queue
 from custom_components.room_climate import controller as ctl_mod
 from custom_components.room_climate.const import DOMAIN
 
@@ -41,6 +42,7 @@ HUMIDITY = "sensor.living_humidity"
 OUTDOOR = "sensor.outdoor_temp"
 REFERENCE = "sensor.reference_temp"
 HEAT_PUMP = "input_boolean.heat_pump"
+HOT_WATER = "water_heater.hot_water"
 
 # Before 0.4: the season comes from an entity. Most behaviour tests still use it, because
 # they set the season directly; the computed season has its own tests below.
@@ -125,6 +127,9 @@ async def house(hass: HomeAssistant, freezer):
     hass.states.async_set(OUTDOOR, "10", {"device_class": "temperature"})
     hass.states.async_set(REFERENCE, "22", {"device_class": "temperature"})
     hass.states.async_set(HEAT_PUMP, "off")
+    hass.states.async_set(
+        HOT_WATER, "off", {"temperature": 40, "operation_list": ["heat_pump", "off"]}
+    )
 
     # stuck: hvac mode never changes; broken: the device's integration raises a bug;
     # linked: {a: b} copies a setpoint sent to a onto b, like heads of one Tado room
@@ -181,6 +186,28 @@ async def house(hass: HomeAssistant, freezer):
 
     # a fake input_boolean: the real switch integration is loaded and would replace a fake
     hass.services.async_register("input_boolean", "turn_on", heat_pump_on)
+
+    async def heat_pump_off(call):
+        fake.calls.append(("heat_pump.turn_off", {"entity_id": call.data["entity_id"]}))
+        if call.data["entity_id"] not in fake.stuck:
+            hass.states.async_set(call.data["entity_id"], "off")
+
+    hass.services.async_register("input_boolean", "turn_off", heat_pump_off)
+
+    def _hot_water(service, change):
+        async def handler(call):
+            fake.calls.append((f"hot_water.{service}", dict(call.data)))
+            st = hass.states.get(call.data["entity_id"])
+            state, attrs = change(call, st)
+            hass.states.async_set(call.data["entity_id"], state, {**st.attributes, **attrs})
+
+        hass.services.async_register("water_heater", service, handler)
+
+    _hot_water("turn_on", lambda call, st: ("heat_pump", {}))
+    _hot_water("turn_off", lambda call, st: ("off", {}))
+    _hot_water(
+        "set_temperature", lambda call, st: (st.state, {"temperature": call.data["temperature"]})
+    )
     return fake
 
 
@@ -815,7 +842,7 @@ async def test_season_from_outdoor_temperature_with_delay(hass, house, freezer) 
     assert _season(hass).state == "cooling"
     assert _st(hass, AC) == ("cool", 25.0)
     assert _st(hass, TRV_LR)[0] == "off"
-    assert hass.states.get(HEAT_PUMP).state == "on"  # never turned off (hot water)
+    assert hass.states.get(HEAT_PUMP).state == "off"  # no heating needed: off
 
 
 async def test_season_hysteresis(hass, house, freezer) -> None:
@@ -1120,6 +1147,95 @@ async def test_ac_temperature_resent_when_not_followed(hass, house, freezer) -> 
     assert _ac_calls(house).count("set_temperature") == 3
     assert len(house.notes) == 1
     assert "cool 25" in house.notes[0]["message"]
+
+
+async def test_hot_water_on_while_home_or_preparing(hass, house, freezer) -> None:
+    await _add(hass, "House", "house", {**HOUSE_FORM, "hot_water_entity": HOT_WATER})
+    await _setup(hass, freezer, with_house=False)
+    # at home: on, then (once it reports on) the hot water temperature
+    st = hass.states.get(HOT_WATER)
+    assert (st.state, st.attributes["temperature"]) == ("heat_pump", 45.0)
+    calls = [n for n, d in house.calls if n.startswith("hot_water.")]
+    assert calls == ["hot_water.turn_on", "hot_water.set_temperature"]
+
+    await _service(
+        hass, freezer, "number", "set_value", "number.house_hot_water_temperature", value=50
+    )
+    assert hass.states.get(HOT_WATER).attributes["temperature"] == 50.0
+
+    await _set(hass, freezer, AT_HOME, "off")  # nobody home: off, in any season
+    assert hass.states.get(HOT_WATER).state == "off"
+    await _set(hass, freezer, PREPARE, "on")  # coming home: pre-heat the water
+    assert hass.states.get(HOT_WATER).state == "heat_pump"
+
+
+async def test_cloud_commands_are_queued_with_a_pause(hass, house, freezer, monkeypatch) -> None:
+    """LG ThinQ (a cloud integration) gets one command at a time with a pause between."""
+    pauses = []
+
+    async def fake_sleep(seconds):
+        pauses.append(seconds)
+
+    monkeypatch.setattr(command_queue, "sleep", fake_sleep)
+    registry = er.async_get(hass)
+    bed_ac = "climate.bedroom_air"
+    for entity_id in (AC, bed_ac):  # register both A/Cs as LG ThinQ entities
+        hass.states.async_remove(entity_id)
+        entry = registry.async_get_or_create(
+            "climate", "lg_thinq", entity_id, suggested_object_id=entity_id.split(".")[1]
+        )
+        assert entry.entity_id == entity_id
+        _climate(
+            hass,
+            entity_id,
+            "off",
+            24,
+            modes=("off", "cool", "heat", "dry"),
+            fan_modes=["auto", "low"],
+            fan_mode="low",
+        )
+    hass.states.async_set(SEASON, "Cooling")
+    await _setup(hass, freezer)
+    await _add(
+        hass, "Bedroom", "room", {"heaters": [TRV_BED], "coolers": [bed_ac], "schedule": SCHEDULE}
+    )
+    await _settle(hass, freezer)
+    assert _st(hass, AC) == ("cool", 25.0)
+    assert _st(hass, bed_ac) == ("cool", 25.0)
+    # 6 LG commands (mode, temperature, fan for each A/C). Each A/C's three go back to
+    # back, so at least 4 waited; the Bedroom's first came > 5 s after the Living Room's.
+    lg_calls = [d for n, d in house.calls if d.get("entity_id") in (AC, bed_ac)]
+    assert len(lg_calls) == 6
+    assert len(pauses) >= 4
+    assert all(0 < p <= 5.0 for p in pauses)
+
+    # with no pause set, commands still go one at a time, but without waiting
+    await _service(
+        hass, freezer, "number", "set_value", "number.house_cloud_command_pause", value=0
+    )
+    pauses.clear()
+    await _set(hass, freezer, SEASON, "Comfort")
+    assert _st(hass, AC)[0] == "off"
+    assert pauses == []
+
+
+async def test_climate_heat_pump_set_to_heat_and_off(hass, house, freezer) -> None:
+    """A climate heat pump gets hvac_mode heat (not its last mode) and off."""
+    _climate(hass, "climate.heat_pump", "cool", 45, modes=("off", "heat", "cool"))
+    await _add(hass, "House", "house", {**HOUSE_FORM, "heat_pump_entity": "climate.heat_pump"})
+    await _setup(hass, freezer, with_house=False)
+    assert hass.states.get("climate.heat_pump").state == "heat"  # cool counted as wrong
+
+    await _outdoor(hass, freezer, 20)  # comfort weather
+    await _later(hass, freezer, 31 * 60)
+    assert _season(hass).state == "comfort"
+    assert hass.states.get("climate.heat_pump").state == "off"
+    calls = [d["hvac_mode"] for n, d in house.calls if d.get("entity_id") == "climate.heat_pump"]
+    assert calls == ["heat", "off"]
+
+    # switched on by hand while no heating is needed: off again
+    await _set(hass, freezer, "climate.heat_pump", "heat")
+    assert hass.states.get("climate.heat_pump").state == "off"
 
 
 async def test_heat_pump_is_kept_on_and_checked(hass, house, freezer) -> None:

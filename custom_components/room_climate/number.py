@@ -12,8 +12,10 @@ from .const import (
     AC_NUMBERS,
     BATH_NUMBERS,
     CONF_HEAT_PUMP,
+    CONF_HOT_WATER,
     CONFIG_NUMBERS,
     HEAT_PUMP_NUMBERS,
+    HOT_WATER_NUMBERS,
     HOUSE_NUMBERS,
     ROOM_NUMBERS,
 )
@@ -30,8 +32,10 @@ async def async_setup_entry(
     ctl = entry.runtime_data
     if isinstance(ctl, HouseController):
         specs = dict(HOUSE_NUMBERS)
-        if entry.options.get(CONF_HEAT_PUMP):
+        if entry.options.get(CONF_HEAT_PUMP) or entry.options.get(CONF_HOT_WATER):
             specs.update(HEAT_PUMP_NUMBERS)
+        if entry.options.get(CONF_HOT_WATER):
+            specs.update(HOT_WATER_NUMBERS)
         async_add_entities([RoomNumber(ctl, key, spec, False) for key, spec in specs.items()])
         return
     entities = [RoomNumber(ctl, key, spec, False) for key, spec in ROOM_NUMBERS.items()]

@@ -25,6 +25,7 @@ from .const import (
     CONF_HEAT_MIN,
     CONF_HEAT_PUMP,
     CONF_HEATERS,
+    CONF_HOT_WATER,
     CONF_HUMIDITY_SENSOR,
     CONF_MANUAL_POLICY,
     CONF_NOTIFY,
@@ -78,6 +79,7 @@ HOUSE_SCHEMA = vol.Schema(
         vol.Optional(CONF_HEAT_PUMP): _entity(
             ["switch", "input_boolean", "climate", "water_heater"]
         ),
+        vol.Optional(CONF_HOT_WATER): _entity(["water_heater", "switch", "input_boolean"]),
         vol.Optional(CONF_NOTIFY): sel.TextSelector(sel.TextSelectorConfig(multiple=True)),
     }
 )

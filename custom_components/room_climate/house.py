@@ -11,17 +11,26 @@ from typing import TYPE_CHECKING, Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_UNAVAILABLE, STATE_UNKNOWN
-from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.core import (
+    CALLBACK_TYPE,
+    Event,
+    EventStateChangedData,
+    HomeAssistant,
+    State,
+    callback,
+)
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
+from .command_queue import async_queued_call
 from .const import (
     AWAY_STATES,
     CONF_AT_HOME,
     CONF_HEAT_PUMP,
+    CONF_HOT_WATER,
     CONF_NOTIFY,
     CONF_OUTDOOR,
     CONF_PREPARE,
@@ -31,6 +40,7 @@ from .const import (
     DEFAULT_HEAT_PUMP_RESPONSE_SECONDS,
     DOMAIN,
     HEAT_PUMP_NUMBERS,
+    HOT_WATER_NUMBERS,
     HOUSE_NUMBERS,
     ON_STATES,
     SEASON_COMFORT,
@@ -61,6 +71,20 @@ def get_data(hass: HomeAssistant) -> DomainData:
     return hass.data.setdefault(DOMAIN, DomainData())
 
 
+@dataclass
+class _Kept:
+    """What the heat pump or hot water was last told, and when it must show it by."""
+
+    on: bool | None = None
+    temp: float | None = None
+    stage: str = "on"  # "on": waiting for on/off; "temp": for the temperature
+    deadline: datetime | None = None
+    attempt: int = 0
+
+    def reset(self) -> None:
+        self.stage, self.deadline, self.attempt = "on", None, 0
+
+
 class HouseController:
     """Reads the house inputs for the rooms and drives the floor thermostats."""
 
@@ -68,15 +92,22 @@ class HouseController:
         self.hass = hass
         self.entry = entry
         self.values: dict[str, Any] = {k: v[4] for k, v in HOUSE_NUMBERS.items()}
-        if entry.options.get(CONF_HEAT_PUMP):
+        if entry.options.get(CONF_HEAT_PUMP) or entry.options.get(CONF_HOT_WATER):
             self.values.update({k: v[4] for k, v in HEAT_PUMP_NUMBERS.items()})
+        if entry.options.get(CONF_HOT_WATER):
+            self.values.update({k: v[4] for k, v in HOT_WATER_NUMBERS.items()})
         self.device_info = DeviceInfo(
             identifiers={(DOMAIN, entry.entry_id)},
             name=entry.title,
             manufacturer="Room Climate",
             model="House controller",
         )
-        self.driver = ClimateDriver(hass, entry.title, self.notify_targets)
+        self.driver = ClimateDriver(
+            hass,
+            entry.title,
+            self.notify_targets,
+            command_pause=lambda: float(self.values["command_pause"]),
+        )
         self.debug_log = DebugFileLog(hass)
         self.pumps = DeviceGroup("pumps", KIND_HEAT, [])
         # room entry_id -> {floor thermostat: highest radiator setpoint, or None}
@@ -91,10 +122,9 @@ class HouseController:
         self.pending: tuple[str, datetime] | None = None  # (next season, wanted since)
         self._last_at_home: bool | None = None
         self.indoor_started = False  # the current season was started by the indoor temperature
-        # Heat pump: when the last turn_on must show up by, and how many were sent
-        self._heat_pump_lock = asyncio.Lock()
-        self._heat_pump_deadline: datetime | None = None
-        self._heat_pump_attempt = 0
+        # Heat pump and hot water: kept on (heating) or off and checked, like the A/Cs
+        self._kept_lock = asyncio.Lock()
+        self._kept = {CONF_HEAT_PUMP: _Kept(), CONF_HOT_WATER: _Kept()}
         self._running = False
         self._pump_debouncer = Debouncer(
             hass, _LOGGER, cooldown=2.0, immediate=True, function=self._async_drive_pumps
@@ -139,9 +169,9 @@ class HouseController:
             self.entry.async_on_unload(
                 async_track_state_change_event(self.hass, watched, _inputs_changed)
             )
-            if heat_pump := opts.get(CONF_HEAT_PUMP):
+            if kept := [opts[k] for k in (CONF_HEAT_PUMP, CONF_HOT_WATER) if opts.get(k)]:
                 self.entry.async_on_unload(
-                    async_track_state_change_event(self.hass, [heat_pump], _heat_pump_changed)
+                    async_track_state_change_event(self.hass, kept, _heat_pump_changed)
                 )
             self.entry.async_on_unload(
                 async_track_time_interval(
@@ -309,7 +339,8 @@ class HouseController:
         return changed
 
     # ------------------------------------------------------------------
-    # Heat pump: kept on while heating is needed, never switched off (hot water)
+    # Heat pump (heating while heating is needed, off otherwise) and hot water (on at its
+    # temperature while someone is home or the house is being prepared, off otherwise)
     # ------------------------------------------------------------------
     @property
     def heating_needed(self) -> bool:
@@ -317,52 +348,110 @@ class HouseController:
 
     @callback
     def _check_heat_pump(self) -> None:
-        if self._running and self.entry.options.get(CONF_HEAT_PUMP):
-            self.hass.async_create_task(self._async_check_heat_pump())
+        opts = self.entry.options
+        if self._running and (opts.get(CONF_HEAT_PUMP) or opts.get(CONF_HOT_WATER)):
+            self.hass.async_create_task(self._async_check_kept())
 
-    async def _async_check_heat_pump(self) -> None:
-        """Turn the heat pump on and check it followed, like the A/Cs.
+    def _kept_wanted(self, key: str) -> tuple[bool, float | None] | None:
+        """(on, temperature) the device should have, or None to leave it alone."""
+        if key == CONF_HEAT_PUMP:
+            if self.read_season() is None:
+                return None  # season not known yet
+            return self.heating_needed, None
+        on = self.read_at_home() or self.read_prepare()
+        return on, float(self.values["hot_water_temp"]) if on else None
 
-        The command is sent once and given the heat pump response time to show up (LG polls
-        its cloud and refuses commands while its app is in use). Then it is sent again;
-        after AC_MODE_ATTEMPTS misses the notify services are told once.
+    @staticmethod
+    def _wanted_state(state: State, on: bool) -> str | None:
+        """The state that shows the device followed; None: anything but off."""
+        if not on:
+            return "off"
+        if state.domain == "climate" and "heat" in (state.attributes.get("hvac_modes") or []):
+            return "heat"  # not just "on": turn_on could restore an old cool mode
+        return None
+
+    async def _async_check_kept(self) -> None:
+        """Keep the heat pump and the hot water as they should be, checking they followed.
+
+        Like the A/Cs, a command is sent once and given the heat pump response time to show
+        up (LG polls its cloud and refuses commands while its app is in use). Then it is
+        sent again; after AC_MODE_ATTEMPTS misses the notify services are told once. A
+        change made by hand the other way is undone. On first, the temperature once the
+        device reports on.
         """
-        entity_id = self.entry.options[CONF_HEAT_PUMP]
-        async with self._heat_pump_lock:
-            if not self.heating_needed:
-                self._heat_pump_deadline, self._heat_pump_attempt = None, 0
-                return
-            state = self.hass.states.get(entity_id)
-            if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
-                return
-            if state.state != "off":
-                self._heat_pump_deadline, self._heat_pump_attempt = None, 0
-                self.driver.failure_cleared(entity_id)
-                return
-            now = dt_util.utcnow()
-            if self._heat_pump_deadline is not None and now < self._heat_pump_deadline:
-                return  # still waiting for it to report on
-            if self._heat_pump_attempt >= AC_MODE_ATTEMPTS:
-                await self.driver.async_report_failure(entity_id, "on")
-                self._heat_pump_attempt = 0  # and keep trying
-            elif self._heat_pump_attempt:
-                _LOGGER.warning(
-                    "%s: %s is still off (attempt %d)",
-                    self.entry.title,
-                    entity_id,
-                    self._heat_pump_attempt,
-                )
-            self._heat_pump_attempt += 1
-            _LOGGER.info("%s: heating needed, turning on %s", self.entry.title, entity_id)
-            try:
-                await self.hass.services.async_call(
-                    entity_id.split(".", 1)[0], "turn_on", {"entity_id": entity_id}, blocking=True
-                )
-            except Exception as err:  # a missing or broken heat pump must not stop the house
-                _LOGGER.warning("%s: could not turn on %s: %s", self.entry.title, entity_id, err)
-            self._heat_pump_deadline = now + timedelta(
-                seconds=self.values.get("heat_pump_response", DEFAULT_HEAT_PUMP_RESPONSE_SECONDS)
+        async with self._kept_lock:  # also keeps the two from sending at the same time
+            for key, kept in self._kept.items():
+                if entity_id := self.entry.options.get(key):
+                    await self._async_keep(entity_id, kept, self._kept_wanted(key))
+
+    async def _async_keep(
+        self, entity_id: str, kept: _Kept, wanted: tuple[bool, float | None] | None
+    ) -> None:
+        if wanted is None:
+            return
+        on, temp = wanted
+        if (on, temp) != (kept.on, kept.temp):
+            kept.on, kept.temp = on, temp  # a new instruction: act at once
+            kept.reset()
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
+            return
+        target = self._wanted_state(state, on)
+        mode_ok = state.state == target or (target is None and state.state != "off")
+        current = to_float(state.attributes.get("temperature"))
+        temp_ok = temp is None or (current is not None and abs(current - temp) < 0.05)
+        if mode_ok and temp_ok:
+            kept.reset()
+            self.driver.failure_cleared(entity_id)
+            return
+
+        now = dt_util.utcnow()
+        on_arrived = mode_ok and kept.stage == "on" and kept.deadline is not None
+        if kept.deadline is not None and now < kept.deadline and not on_arrived:
+            return  # still waiting for it to report the change
+        label = (target or "on") if temp is None else f"{target or 'on'} {temp:g} °C"
+        if on_arrived:
+            kept.attempt = 0  # on was reported: the temperature gets its own attempts
+        elif kept.attempt >= AC_MODE_ATTEMPTS:
+            await self.driver.async_report_failure(entity_id, label)
+            kept.attempt = 0  # and keep trying
+        elif kept.attempt:
+            _LOGGER.warning(
+                "%s: %s is %s %s, not %s (attempt %d)",
+                self.entry.title,
+                entity_id,
+                state.state,
+                current,
+                label,
+                kept.attempt,
             )
+        kept.attempt += 1
+
+        domain = state.domain
+        if not mode_ok:
+            kept.stage = "on"
+            if target in ("heat", "off") and domain == "climate":
+                service, data = "set_hvac_mode", {"entity_id": entity_id, "hvac_mode": target}
+            else:
+                service, data = ("turn_on" if on else "turn_off"), {"entity_id": entity_id}
+        else:
+            kept.stage = "temp"
+            service, data = "set_temperature", {"entity_id": entity_id, "temperature": temp}
+        _LOGGER.info("%s: %s.%s %s", self.entry.title, domain, service, data)
+        try:
+            await async_queued_call(
+                self.hass, entity_id, domain, service, data, float(self.values["command_pause"])
+            )
+        except Exception as err:  # a missing or broken device must not stop the house
+            _LOGGER.warning("%s: %s.%s failed: %s", self.entry.title, domain, service, err)
+        kept.deadline = now + timedelta(
+            seconds=self.values.get("heat_pump_response", DEFAULT_HEAT_PUMP_RESPONSE_SECONDS)
+        )
+        # A fast device reports straight away: continue with the temperature now.
+        if kept.stage == "on" and temp is not None:
+            state = self.hass.states.get(entity_id)
+            if state is not None and state.state not in ("off", STATE_UNAVAILABLE, STATE_UNKNOWN):
+                await self._async_keep(entity_id, kept, (on, temp))
 
     # ------------------------------------------------------------------
     # Inputs, read live so rooms never see a stale value
