@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import time as monotonic_time
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -46,7 +47,7 @@ from .const import (
     CONF_MANUAL_POLICY,
     CONF_SCHEDULE,
     CONF_TEMP_SENSOR,
-    CORRECTION_HYSTERESIS,
+    CORRECTION_STEP,
     DEFAULT_COOL_MAX,
     DEFAULT_COOL_MIN,
     DEFAULT_HEAT_MAX,
@@ -355,13 +356,17 @@ class RoomController:
         for entity_id in self.heaters.entities + self.coolers.entities:
             state = self.hass.states.get(entity_id)
             reading = to_float(state.attributes.get("current_temperature")) if state else None
+            # Whole CORRECTION_STEPs, rounded down: never more than the difference, and
+            # nothing below one step or when the device reads lower than the room.
             if reading is None:
                 self.corrections.pop(entity_id, None)
                 continue
-            raw = min(max(reading - room, 0.0), cap)
-            previous = self.corrections.get(entity_id, 0.0)
-            if abs(raw - previous) >= CORRECTION_HYSTERESIS or previous > cap:
-                self.corrections[entity_id] = min(round(raw * 2) / 2, cap)
+            steps = math.floor((reading - room) / CORRECTION_STEP + 1e-6)
+            correction = min(steps * CORRECTION_STEP, cap)
+            if correction > 0:
+                self.corrections[entity_id] = correction
+            else:
+                self.corrections.pop(entity_id, None)
 
     # ------------------------------------------------------------------
     # Decision logic
@@ -581,11 +586,14 @@ class RoomController:
         self._compute()
         plan = self._plan()
         self._log_decision(plan)
-        for entity_id, (group, mode, temp) in plan.items():
-            await self.driver.async_drive(group, entity_id, mode, temp)
-        if house := self._house():
-            house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
-        self._notify()
+        try:
+            for entity_id, (group, mode, temp) in plan.items():
+                await self.driver.async_drive(group, entity_id, mode, temp)
+        finally:
+            # Even if a device failed: the floor thermostat and the sensors stay current.
+            if house := self._house():
+                house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
+            self._notify()
 
     def _log_decision(self, plan: dict[str, tuple[DeviceGroup, str, float | None]]) -> None:
         """One debug line per change of decision: why the room does what it does."""

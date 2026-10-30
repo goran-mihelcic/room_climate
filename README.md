@@ -66,7 +66,7 @@ Radiator heads sit next to the radiator and read higher than the room. When a ro
 
 > room target 21 °C, sensor 20.5 °C, radiator reads 22.5 °C → radiator set to 23 °C
 
-The radiator then closes when the *room* reaches the target. The correction moves only when it changes by 0.5 °C or more, and never exceeds *Max radiator correction* (default 3 °C). A radiator that reads lower than the room gets no correction. The same correction applies to an A/C heating during a boost. Cooling is never corrected.
+The radiator then closes when the *room* reaches the target. The correction is the difference rounded **down** to whole 0.5 °C steps, so it is never more than the difference: 0.4 °C → none, 0.8 °C → 0.5 °C, 2.3 °C → 2 °C. It never exceeds *Max radiator correction* (default 3 °C), and a radiator that reads the same as or lower than the room gets none. The same correction applies to an A/C heating during a boost. Cooling is never corrected.
 
 ### Floor thermostat
 

@@ -62,6 +62,7 @@ class ClimateDriver:
         self.driving: set[str] = set()
         self._own_contexts: deque[str] = deque(maxlen=200)
         self._failed: set[str] = set()
+        self._erroring: set[tuple[str, str]] = set()  # (entity_id, service) raising errors
 
     def is_own(self, context: Context) -> bool:
         return context.id in self._own_contexts or (
@@ -206,11 +207,19 @@ class ClimateDriver:
             return False
         except Exception:
             # A bug in the device's integration must not stop the rest of the room.
-            _LOGGER.exception(
-                "%s: climate.%s raised an error in %s's integration",
-                self.name,
-                service,
-                data[ATTR_ENTITY_ID],
-            )
+            # Retried every cycle, so the traceback is logged once until it works again.
+            key = (data[ATTR_ENTITY_ID], service)
+            if key in self._erroring:
+                _LOGGER.debug("%s: climate.%s still failing for %s", self.name, *reversed(key))
+            else:
+                self._erroring.add(key)
+                _LOGGER.exception(
+                    "%s: climate.%s raised an error in %s's integration "
+                    "(retried every minute, logged again only after it has worked)",
+                    self.name,
+                    service,
+                    data[ATTR_ENTITY_ID],
+                )
             return False
+        self._erroring.discard((data[ATTR_ENTITY_ID], service))
         return True

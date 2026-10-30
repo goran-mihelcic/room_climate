@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-48 passed in 3.4s
+49 passed in 3.3s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -128,7 +128,7 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
 | Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
 | Override and restart | override expiry, values and override restored after a restart |
-| Robustness and logging | a device integration raising an error doesn't stop the room, devices registered and linked, Season sensor shows its source, debug log file |
+| Robustness and logging | a device integration raising an error doesn't stop the room (boost "both" with a crashing A/C), devices registered and linked, Season sensor shows its source, debug log file |
 
 ## Troubleshooting
 

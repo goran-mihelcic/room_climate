@@ -106,7 +106,7 @@ BATH_STATUSES: Final = [
 # ---- Behaviour tuning ---------------------------------------------------
 COMMAND_GRACE_SECONDS: Final = 45  # ignore device reports this long after we command it
 UPDATE_INTERVAL_SECONDS: Final = 60
-CORRECTION_HYSTERESIS: Final = 0.5  # °C change needed before a radiator correction moves
+CORRECTION_STEP: Final = 0.5  # radiator corrections are whole steps of this, rounded down
 
 # ---- Entity defaults ----------------------------------------------------
 # key: (name, min, max, step, default, unit)

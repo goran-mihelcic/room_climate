@@ -488,13 +488,19 @@ async def test_radiator_reading_high_is_corrected(hass, house, freezer) -> None:
     # TRV reads 2 °C above the room sensor -> setpoint 21 + 2
     assert _st(hass, TRV_LR) == ("heat", 23.0)
     assert _st(hass, TRV_DIN) == ("heat", 21.0)  # reads lower: no correction
-    assert _attr(hass, "radiator_corrections")[TRV_LR] == 2.0
+    assert _attr(hass, "radiator_corrections") == {TRV_LR: 2.0}
     assert _st(hass, THERMO) == ("heat", 23.0)
-    # small drift is ignored (hysteresis), large one is capped at the max correction
-    await _set(hass, freezer, TRV_LR, current_temperature=22.8)
-    assert _st(hass, TRV_LR) == ("heat", 23.0)
-    await _set(hass, freezer, TRV_LR, current_temperature=27)
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    # whole 0.5 °C steps, rounded down: never more than the difference
+    for reading, setpoint in (
+        (22.8, 23.0),  # 2.3 -> 2.0
+        (21.3, 21.5),  # 0.8 -> 0.5
+        (21.0, 21.5),  # exactly 0.5 -> 0.5
+        (20.9, 21.0),  # 0.4: below one step, none
+        (20.0, 21.0),  # room warmer than the radiator: none
+        (27.0, 24.0),  # 6.5 -> capped at max correction 3
+    ):
+        await _set(hass, freezer, TRV_LR, current_temperature=reading)
+        assert _st(hass, TRV_LR) == ("heat", setpoint), reading
 
 
 async def test_manual_change_on_corrected_radiator(hass, house, freezer) -> None:
@@ -579,6 +585,28 @@ async def test_boost_both(hass, house, freezer) -> None:
     )
     assert _st(hass, TRV_LR) == ("heat", 24.0)
     assert _st(hass, AC) == ("heat", 21.0)
+
+
+async def test_boost_both_when_ac_integration_crashes(hass, house, freezer, caplog) -> None:
+    """LG ThinQ raises TypeError on set_temperature: radiators still boost, boost still ends."""
+    hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
+    house.broken.add(AC)
+    await _setup(hass, freezer, has_bathroom=False)
+    await _service(
+        hass, freezer, "select", "select_option", "select.living_room_boost_method", option="both"
+    )
+    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    assert _st(hass, AC) == ("heat", 24)  # mode set, its own setpoint kept: set_temperature failed
+    assert _st(hass, THERMO) == ("heat", 24.0)
+    assert _status(hass) == "boost"
+    await _settle(hass, freezer, seconds=61)  # retried, but the traceback is logged once
+    assert caplog.text.count("set_temperature raised an error in climate.living_room_air") == 1
+
+    await _set(hass, freezer, TEMP, "20.8")
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    assert _st(hass, AC)[0] == "off"
+    assert _st(hass, THERMO) == ("heat", 21.0)
+    assert _status(hass) == "comfort"
 
 
 async def test_no_boost_select_without_ac(hass, house, freezer) -> None:
