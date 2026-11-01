@@ -26,9 +26,36 @@ async def async_setup_entry(
 ) -> None:
     ctl = entry.runtime_data
     if isinstance(ctl, HouseController):
-        async_add_entities([DebugLogSwitch(ctl)])
+        async_add_entities([AutomaticSwitch(ctl), DebugLogSwitch(ctl)])
         return
     async_add_entities([InUseSwitch(ctl), OverrideSwitch(ctl)])
+
+
+class AutomaticSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """Room Climate manages the devices. Off: every device is left as it is."""
+
+    _attr_icon = "mdi:robot"
+
+    def __init__(self, ctl: HouseController) -> None:
+        super().__init__(ctl, "automatic", "Automatic control")
+
+    @property
+    def is_on(self) -> bool:
+        return self._ctl.automatic
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state == "off":
+            self._ctl.values["automatic"] = False  # restored before anything is driven
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._ctl.set_automatic(True)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._ctl.set_automatic(False)
+        self.async_write_ha_state()
 
 
 class DebugLogSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):

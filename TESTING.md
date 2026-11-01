@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-76 passed in 5.5s
+79 passed in 6.3s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -127,7 +127,7 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | A/C commands | desired state kept, mode → temperature → fan auto, a slow temperature report waited for and not re-sent, a temperature not followed re-sent and reported once, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once (notify action or notify entity), recovered |
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
 | Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
-| Override and restart | override expiry, Resume automatic button (manual target, device turned off, override), values and override restored after a restart |
+| Override and restart | override expiry, Resume automatic button (manual target, device turned off, override), Automatic control off leaves every device as it is (rooms, floor thermostat, heat pump, hot water; hand changes not adopted), on follows the current situation, off survives a restart, values and override restored after a restart |
 | Robustness and logging | cloud integration (LG ThinQ) commands queued one at a time with the House pause, local ones not; a device integration raising an error doesn't stop the room (boost "both" with a crashing A/C), devices registered and linked, Season sensor shows its source, debug log file |
 
 ## Troubleshooting

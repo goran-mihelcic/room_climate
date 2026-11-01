@@ -279,6 +279,8 @@ class RoomController:
     def _check_manual_change(self, group: DeviceGroup, entity_id: str, new_state) -> None:
         if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
+        if self.paused:
+            return  # not managing: nothing done by hand is adopted
         if entity_id in self.driver.driving:
             return  # echo of a command we are sending right now
         if self.driver.is_pending(entity_id):
@@ -652,8 +654,23 @@ class RoomController:
     # ------------------------------------------------------------------
     # Applying to devices
     # ------------------------------------------------------------------
+    @property
+    def paused(self) -> bool:
+        """Automatic control is off on the House: leave every device as it is."""
+        house = self._house()
+        return house is not None and not house.automatic
+
     async def _async_apply(self) -> None:
         self._compute()
+        if self.paused:
+            self.driver.async_shutdown()  # drop commands still waiting for an A/C
+            self.room_status = "paused"
+            if self.has_bathroom:
+                self.bath_status = "paused"
+            if house := self._house():
+                house.set_pump_demand(self.entry.entry_id, None)
+            self._notify()
+            return
         plan = self._plan()
         self._log_decision(plan)
         try:

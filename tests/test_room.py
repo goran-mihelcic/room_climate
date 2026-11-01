@@ -1434,6 +1434,61 @@ async def test_resume_automatic_button(hass, house, freezer) -> None:
     assert _st(hass, TRV_LR) == ("heat", 21.0)
 
 
+AUTOMATIC = "switch.house_automatic_control"
+
+
+async def test_automatic_control_off_leaves_devices_as_they_are(hass, house, freezer) -> None:
+    await _setup(hass, freezer)
+    assert hass.states.get(AUTOMATIC).state == "on"
+    await _service(hass, freezer, "switch", "turn_off", AUTOMATIC)
+    sent = len(house.calls)
+    assert _status(hass) == "paused"
+    assert _status(hass, "sensor.living_room_bathroom_status") == "paused"
+
+    # the schedule ends and someone turns a radiator up: nothing is sent, nothing adopted
+    await _set(hass, freezer, SCHEDULE, "off")
+    await _set(hass, freezer, TRV_LR, temperature=25)
+    await _later(hass, freezer, 61)
+    assert house.calls[sent:] == []
+    assert _st(hass, TRV_LR) == ("heat", 25)
+    assert _st(hass, TRV_DIN) == ("heat", 21.0)
+    assert _st(hass, THERMO) == ("heat", 21.0)
+
+    # back on: follows the current situation (eco, schedule off), the hand change dropped
+    await _service(hass, freezer, "switch", "turn_on", AUTOMATIC)
+    for e in (TRV_LR, TRV_DIN):
+        assert _st(hass, e) == ("heat", 19.0)
+    assert _st(hass, THERMO) == ("heat", 19.0)
+    assert _status(hass) == "eco"
+    assert _attr(hass, "manual_target") is None
+
+
+async def test_automatic_control_off_leaves_heat_pump_and_hot_water(hass, house, freezer) -> None:
+    await _add(hass, "House", "house", {**HOUSE_FORM, "hot_water_entity": HOT_WATER})
+    await _setup(hass, freezer, with_house=False)
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    assert hass.states.get(HOT_WATER).state == "heat_pump"
+    await _service(hass, freezer, "switch", "turn_off", AUTOMATIC)
+
+    await _set(hass, freezer, AT_HOME, "off")  # would switch hot water and heating off
+    await _later(hass, freezer, 61)
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    assert hass.states.get(HOT_WATER).state == "heat_pump"
+    assert _season(hass).state == "comfort"  # still worked out, just not acted on
+
+    await _service(hass, freezer, "switch", "turn_on", AUTOMATIC)
+    assert hass.states.get(HEAT_PUMP).state == "off"
+    assert hass.states.get(HOT_WATER).state == "off"
+
+
+async def test_automatic_control_off_survives_a_restart(hass, house, freezer) -> None:
+    mock_restore_cache_with_extra_data(hass, [(State(AUTOMATIC, "off"), {})])
+    await _setup(hass, freezer)
+    assert hass.states.get(AUTOMATIC).state == "off"
+    assert house.calls == []
+    assert _status(hass) == "paused"
+
+
 async def test_radiator_turned_off_manually_is_respected(hass, house, freezer) -> None:
     await _setup(hass, freezer)
     await _set(hass, freezer, TRV_DIN, "off")

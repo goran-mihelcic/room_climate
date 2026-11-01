@@ -98,6 +98,7 @@ ROOM_STATUSES: Final = [
     "manual",
     "boost",
     "drying",
+    "paused",
 ]
 BATH_STATUSES: Final = [
     "waiting",
@@ -106,6 +107,7 @@ BATH_STATUSES: Final = [
     "bath_period",
     "follow_room",
     "manual",
+    "paused",
 ]
 
 # ---- Behaviour tuning ---------------------------------------------------

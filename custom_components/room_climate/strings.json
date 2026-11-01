@@ -170,7 +170,8 @@
           "override": "Override",
           "manual": "Manual",
           "boost": "Boost",
-          "drying": "Drying"
+          "drying": "Drying",
+          "paused": "Paused"
         }
       },
       "bath_status": {
@@ -180,7 +181,8 @@
           "frost_protection": "Frost protection",
           "bath_period": "Bathroom period",
           "follow_room": "Following room",
-          "manual": "Manual"
+          "manual": "Manual",
+          "paused": "Paused"
         }
       }
     },

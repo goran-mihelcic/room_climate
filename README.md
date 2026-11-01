@@ -156,6 +156,15 @@ The bathroom schedule applies only while the room is heating. In frost protectio
 
 The *Override* switch applies the override temperature (heating or cooling) for the override duration (0 = until switched off). It survives restarts.
 
+## Automatic control
+
+The House device's **Automatic control** switch (on by default) turns Room Climate's management on and off for the whole house.
+
+- **Off:** nothing is sent to any device: radiators, A/Cs, bathrooms, floor thermostats, heat pump and hot water all stay exactly as they are. Nothing is switched off or reset. Changes made by hand are not taken as manual changes, and commands still waiting for a slow A/C are dropped. Room and bathroom *Status* show **Paused**; the House *Season* keeps being worked out, so you can see what would happen.
+- **On:** every room drops its manual targets and applies what the current situation calls for at once; the heat pump and hot water are checked afresh.
+
+The switch keeps its state across restarts.
+
 ## Manual changes on devices
 
 - **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
@@ -169,13 +178,14 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 
 **House device**
 - *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show the outdoor and reference temperatures, the next season and since when, pre-heat, presence, prepare house and each floor thermostat's setpoint.
+- *Automatic control* switch (see [Automatic control](#automatic-control)).
 - *Debug log file* switch (see [Logging](#logging)).
 - *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C, for every room that has no pre-heat temperature of its own), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
 - Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
 - *Heat pump response time* (5 min; with a heat pump or hot water), *Hot water temperature* (45 °C; with hot water), *Cloud command pause* (5 s).
 
 **Room device**
-- *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).
+- *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`, `paused`).
 - Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
 - Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 

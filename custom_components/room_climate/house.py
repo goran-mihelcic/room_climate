@@ -92,6 +92,7 @@ class HouseController:
         self.hass = hass
         self.entry = entry
         self.values: dict[str, Any] = {k: v[4] for k, v in HOUSE_NUMBERS.items()}
+        self.values["automatic"] = True  # Automatic control switch
         if entry.options.get(CONF_HEAT_PUMP) or entry.options.get(CONF_HOT_WATER):
             self.values.update({k: v[4] for k, v in HEAT_PUMP_NUMBERS.items()})
         if entry.options.get(CONF_HOT_WATER):
@@ -218,6 +219,37 @@ class HouseController:
     def _rooms_update(self) -> None:
         for room in get_data(self.hass).rooms.values():
             room.request_update()
+
+    # ------------------------------------------------------------------
+    # Automatic control (House switch): off leaves every device as it is
+    # ------------------------------------------------------------------
+    @property
+    def automatic(self) -> bool:
+        return bool(self.values["automatic"])
+
+    @callback
+    def set_automatic(self, on: bool) -> None:
+        if on == self.automatic:
+            return
+        self.values["automatic"] = on
+        _LOGGER.info(
+            "%s: automatic control %s",
+            self.entry.title,
+            "on: following the current situation" if on else "off: devices left as they are",
+        )
+        if on:
+            # Back to automatic: what was done by hand meanwhile is not adopted, and the
+            # heat pump and hot water are checked afresh.
+            for kept in self._kept.values():
+                kept.on = kept.temp = None
+                kept.reset()
+            for room in get_data(self.hass).rooms.values():
+                room.settings_changed()
+        self._evaluate_season()
+        self._notify()
+        self._rooms_update()
+        self._schedule_pumps()
+        self._check_heat_pump()
 
     # ------------------------------------------------------------------
     # Season, computed from the outdoor and reference (indoor) temperatures
@@ -349,6 +381,8 @@ class HouseController:
     @callback
     def _check_heat_pump(self) -> None:
         opts = self.entry.options
+        if not self.automatic:
+            return
         if self._running and (opts.get(CONF_HEAT_PUMP) or opts.get(CONF_HOT_WATER)):
             self.hass.async_create_task(self._async_check_kept())
 
@@ -531,6 +565,8 @@ class HouseController:
             self._pump_debouncer.async_schedule_call()
 
     async def _async_drive_pumps(self) -> None:
+        if not self.automatic:
+            return  # paused: floor thermostats stay as they are
         targets: dict[str, float | None] = {}
         for demand in self._demands.values():
             for thermostat, setpoint in demand.items():
