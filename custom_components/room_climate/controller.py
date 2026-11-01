@@ -488,7 +488,8 @@ class RoomController:
         elif self.regime == REGIME_FROST:
             target, status = house.values["frost"], "frost_protection"
         elif self.regime == REGIME_PREHEAT:
-            target, status = house.values["preheat"], "preheat"
+            # the room's own pre-heat temperature, or the House's while it is 0
+            target, status = (v["preheat"] or house.values["preheat"]), "preheat"
         elif self.regime == REGIME_HEAT:
             if self.in_schedule:
                 target, status = v["heat_comfort"], "comfort"

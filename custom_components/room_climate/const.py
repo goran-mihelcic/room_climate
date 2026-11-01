@@ -145,6 +145,8 @@ ROOM_NUMBERS: Final = {
     "boost_margin": ("Boost exit margin", 0.0, 2.0, 0.1, 0.3, "°C"),
     "correction_max": ("Max radiator correction", 0.0, 6.0, 0.5, 3.0, "°C"),
     "override_temp": ("Override temperature", 10.0, 32.0, 0.5, 22.0, "°C"),
+    # 0: use the House pre-heat temperature
+    "preheat": ("Pre-heat temperature", 0.0, 25.0, 0.5, 0.0, "°C"),
     "override_minutes": ("Override duration", 0.0, 720.0, 15.0, 120.0, "min"),
 }
 DEFAULT_HEAT_PUMP_RESPONSE_SECONDS: Final = 300.0

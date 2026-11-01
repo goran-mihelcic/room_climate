@@ -762,6 +762,15 @@ async def test_frost_season_and_prepare_house(hass, house, freezer) -> None:
     )
     assert _st(hass, TRV_LR) == ("heat", 19.0)
 
+    # a room's own pre-heat temperature overrides the House's; 0 goes back to the House's
+    room_preheat = "number.living_room_pre_heat_temperature"
+    assert hass.states.get(room_preheat).state == "0.0"
+    await _service(hass, freezer, "number", "set_value", room_preheat, value=21)
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    assert _st(hass, BATH_TRV) == ("heat", 21.0)  # the bathroom follows the room
+    await _service(hass, freezer, "number", "set_value", room_preheat, value=0)
+    assert _st(hass, TRV_LR) == ("heat", 19.0)
+
     # rooms not in use are not pre-heated
     await _service(hass, freezer, "switch", "turn_off", "switch.living_room_in_use")
     assert _st(hass, TRV_LR) == ("heat", 12.0)

@@ -83,7 +83,7 @@ Houses set up before 0.4 read the season from an *HVAC season entity* until an o
 | **Comfort** | off | off |
 | not known yet (outdoor sensor never read), or no House set up | devices held as they are (status *waiting*) | same |
 
-Frost protection and pre-heat temperatures are set on the House device and apply to every room.
+The frost protection temperature is set on the House device and applies to every room. The pre-heat temperature is set on the House device too; a room can override it with its own *Pre-heat temperature* (0 = use the House's). Its bathroom follows the room.
 
 ### Radiator correction
 
@@ -170,13 +170,13 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 **House device**
 - *Season* sensor (`heating`, `cooling`, `comfort`, `frost_protection`, `waiting`); attributes show the outdoor and reference temperatures, the next season and since when, pre-heat, presence, prepare house and each floor thermostat's setpoint.
 - *Debug log file* switch (see [Logging](#logging)).
-- *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
+- *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C, for every room that has no pre-heat temperature of its own), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
 - Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
 - *Heat pump response time* (5 min; with a heat pump or hot water), *Hot water temperature* (45 °C; with hot water), *Cloud command pause* (5 s).
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`).
-- Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C).
+- Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
 - Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**
