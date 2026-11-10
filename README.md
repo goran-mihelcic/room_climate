@@ -26,7 +26,7 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | Reference room temperature sensor | `sensor.living_room_temperature` | optional; an indoor temperature that can force heating or cooling |
 | At home entity | `input_boolean.at_home` | off: nobody is home |
 | Prepare house entity | `input_boolean.prepare_house` | optional; pre-heat or pre-cool before arrival |
-| Heat pump | `climate.heat_pump` | optional; heating while heating is needed, off otherwise (see [Heat pump](#heat-pump)) |
+| Heat pump | `climate.heat_pump` | optional; heating while any radiator should heat, off otherwise (see [Heat pump](#heat-pump)) |
 | Hot water | `water_heater.hot_water` | optional; on at the hot water temperature while someone is home or *Prepare house* is on, off otherwise (see [Hot water](#hot-water)) |
 | Notify services | `mobile_app_my_phone` or `notify.my_group` | optional; told when an A/C does not switch mode. A notify action (mobile app) or a notify entity (e.g. a notify group helper) |
 
@@ -65,7 +65,7 @@ The House works out the season from the outdoor temperature, the reference room 
 - **Started by the indoor temperature:** heating that the reference room's temperature started keeps going until that room reaches its **own target** (comfort on schedule, eco off schedule, or a manual or override target). Cooling started that way keeps going until the room is down to its cooling target. Either way it never ends before the threshold plus the hysteresis. The reference room is the room whose *Room temperature sensor* is the House's reference sensor; without such a room, threshold plus hysteresis applies. The *Season* sensor's `started_by` attribute shows `indoor` or `outdoor`.
 - **Delay** (*Season change delay*, 30 min): a new season must be wanted for that long before it takes over; a shorter spell is ignored. Leaving or coming home acts at once.
 - An unavailable outdoor sensor keeps the current season. Until the sensor has a first value, rooms wait. After a restart the last season carries on.
-- **Heat pump:** heating while the season is Heating or Frost protection, or pre-heating runs; off otherwise (see [Heat pump](#heat-pump)).
+- **Heat pump:** heating while any room or bathroom has radiators set to heat, off otherwise (see [Heat pump](#heat-pump)).
 - **Nobody home in heating weather** (outdoor between the frost and heating season temperatures) is Comfort: every radiator, bathroom radiator and floor thermostat is switched off.
 
 All these temperatures are on the House device (Configuration). The *Season* sensor shows the outdoor and reference temperatures and, while a change is waiting out the delay, the next season and since when.
@@ -113,6 +113,8 @@ In the heating season, when the room is more than *Boost threshold* below its ta
 - *A/C in heat mode:* radiators stay at the target and the A/C heats to the target until boost ends, then switches off. Setpoint changes on the A/C during boost are reverted.
 - *Both.*
 
+**Boost with floor heating** (switch, rooms with bathroom floor heating, off by default): the bathroom floor heating also runs at its floor heating temperature during a boost, whatever its schedule. An A/C heating in a boost runs its fan at *high*.
+
 ### Drying
 
 When a room's humidity is above the House's *Drying humidity threshold* and the room is neither heated nor cooled, its A/C runs in *dry* mode until humidity falls to threshold − *Drying hysteresis*. Frost protection does not stop drying; heating, pre-heat and cooling do. This applies whether or not the room is in use.
@@ -123,7 +125,7 @@ Room Climate keeps what each A/C *should* be doing (mode and temperature) and ch
 
 1. Set the HVAC mode.
 2. Once the A/C reports the new mode: set the temperature.
-3. Set the fan to *auto*.
+3. Set the fan to *auto*, or to *high* while the A/C heats as part of a boost.
 
 Each step is sent **once** and then given the room's **A/C response time** (default 60 s, 3–600 s) to show up in the A/C's state. Nothing is re-sent meanwhile. That suits LG ThinQ, which reports through slow cloud polling and refuses commands while someone uses the LG app. If the A/C still hasn't followed by then, the step is sent again. After a second miss the House's notify services get a message (once, until it works again), and it keeps being retried every response time.
 
@@ -131,7 +133,7 @@ Waiting does not hold up the room: radiators, bathroom and floor thermostat are 
 
 ### Heat pump
 
-Room Climate keeps the House's heat pump **heating while heating is needed** (Heating or Frost protection season, or pre-heating) and **off otherwise** (Comfort or Cooling, once the season has changed; at start-up, before the season is known, it is left alone). A `climate` heat pump is set with its HVAC mode, `heat` or `off`, and must report exactly that: `climate.turn_on` could bring back an old `cool` mode. Other heat pump entities (switch, input_boolean) are turned on or off.
+Room Climate keeps the House's heat pump **heating while any radiator should heat** — any room or bathroom whose radiators are set to heat: heating, frost protection, pre-heat, a bathroom's *Heating on* in any season but cooling — and **off when none is**, whatever the season. At start-up it is left alone until the season is known and every room has reported. A `climate` heat pump is set with its HVAC mode, `heat` or `off`, and must report exactly that: `climate.turn_on` could bring back an old `cool` mode. Other heat pump entities (switch, input_boolean) are turned on or off.
 
 Like the A/Cs, each command is sent once and given the **Heat pump response time** (House device, default 5 min) to show up in the heat pump's state, then sent again; after a second miss the notify services are told once. A change made by hand the other way is undone.
 
@@ -152,6 +154,8 @@ Commands to devices of a **cloud** integration (LG ThinQ) go out **one at a time
 
 The bathroom schedule applies only while the room is heating. In frost protection the bathroom radiators hold the frost temperature, during pre-heat they follow the room, and the floor heating is off.
 
+**Heating on** (switch on the bathroom device): heats the bathroom outside its schedule for the *Heating on duration* (default 60 min; 0 = until switched off), then it goes back to the schedule. The bathroom radiators go to the bathroom comfort temperature and the floor heating comes on, in any season but cooling (outside the heating season the heat pump is switched on for the radiators). *Resume automatic* also ends it; it is kept across restarts.
+
 ### Override
 
 The *Override* switch applies the override temperature (heating or cooling) for the override duration (0 = until switched off). It survives restarts.
@@ -169,7 +173,7 @@ The switch keeps its state across restarts.
 
 - **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
 - **Block:** the planned temperature is restored straight away, and a device switched off by hand is switched back on. Choose it per room under **Configure → Manual changes** to keep a room out of manual mode entirely.
-- **Resume automatic** (button on the room device): drops manual targets in the room and its bathroom, switches devices turned off by hand back on and ends an override. The room follows its schedule again at once.
+- **Resume automatic** (button on the room device): drops manual targets in the room and its bathroom, switches devices turned off by hand back on, ends an override and the bathroom's *Heating on*. The room follows its schedule again at once.
 - **Wrong mode** (A/C switched to cool during heating, or turned on when it should be off) is always reverted.
 
 Commands sent by the integration carry their own context and devices get a 45 s settling window, so a device reporting a command back is never mistaken for a manual change.
@@ -187,10 +191,10 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`, `paused`).
 - Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
-- Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
+- Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost with floor heating* (off; rooms with bathroom floor heating), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**
-- *Target temperature*, *Status*, *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C).
+- *Target temperature*, *Status* (`bath_period`, `heating_on`, `follow_room`, `manual`, `frost_protection`, `off`, `waiting`, `paused`), *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C), *Heating on* switch, *Heating on duration* (60 min).
 
 ## Logging
 

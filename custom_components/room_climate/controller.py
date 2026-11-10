@@ -118,8 +118,10 @@ class RoomController:
         self.values: dict[str, Any] = {k: v[4] for k, v in ROOM_NUMBERS.items()}
         self.values.update({"in_use": True, "override": False, "override_until": None})
         self.values["boost_method"] = BOOST_HEATERS
+        self.values["boost_floor"] = False  # Boost with floor heating switch
         if self.has_bathroom:
             self.values.update({k: v[4] for k, v in BATH_NUMBERS.items()})
+            self.values.update({"bath_on": False, "bath_on_until": None})  # Heating on
         if self.coolers.entities:
             self.values.update({k: v[4] for k, v in AC_NUMBERS.items()})
 
@@ -165,7 +167,8 @@ class RoomController:
             command_pause=self._command_pause,
         )
         self._listeners: list[CALLBACK_TYPE] = []
-        self.end_override: Callable[[], None] | None = None  # set by the Override switch
+        # value key -> how to end it; set by the timed switches (Override, Heating on)
+        self.end_timers: dict[str, Callable[[], None]] = {}
         self._last_decision: str | None = None
         self._running = False
         self._debouncer = Debouncer(
@@ -225,6 +228,7 @@ class RoomController:
             data.rooms.pop(self.entry.entry_id, None)
             if house := self._house():
                 house.set_pump_demand(self.entry.entry_id, None)
+                house.set_heat_demand(self.entry.entry_id, None)
 
         self.entry.async_on_unload(async_at_started(self.hass, _started))
         self.entry.async_on_unload(_stop)
@@ -258,10 +262,12 @@ class RoomController:
 
     @callback
     def resume_automatic(self) -> None:
-        """Back to the schedule: drop manual targets and devices turned off, end override."""
+        """Back to the schedule: drop manual targets and devices turned off, end the
+        override and the bathroom's Heating on."""
         _LOGGER.info("%s: back to automatic control", self.entry.title)
-        if self.values["override"] and self.end_override is not None:
-            self.end_override()  # also calls settings_changed
+        for key, end in list(self.end_timers.items()):
+            if self.values.get(key):
+                end()  # also calls settings_changed
         self.settings_changed()
 
     # ------------------------------------------------------------------
@@ -471,7 +477,7 @@ class RoomController:
 
         # ---- period keys: a change resets manual targets ----------------
         room_key = (self.regime, self.in_schedule, v["override"])
-        bath_key = (self.regime, self.in_bath_period, v["override"])
+        bath_key = (self.regime, self.in_bath_period, v["override"], v.get("bath_on"))
         for group, key in (
             (self.heaters, room_key),
             (self.coolers, room_key),
@@ -549,6 +555,11 @@ class RoomController:
             self.bath_target, self.bath_status = None, "off"
         elif self.reason == "waiting":
             self.bath_target, self.bath_status = None, "waiting"
+        elif self._bath_on():
+            # in any season but cooling: the heat pump follows the radiators that heat
+            self.bath_target, self.bath_status = v["bath_comfort"], "heating_on"
+            if self.regime == REGIME_HEAT and self.bath_heaters.manual_target is not None:
+                self.bath_target, self.bath_status = self.bath_heaters.manual_target, "manual"
         elif self.regime == REGIME_FROST:
             self.bath_target, self.bath_status = target, "frost_protection"
         elif self.regime == REGIME_PREHEAT:
@@ -562,6 +573,17 @@ class RoomController:
                 self.bath_target, self.bath_status = self.bath_heaters.manual_target, "manual"
         else:
             self.bath_target, self.bath_status = None, "off"
+
+    def _bath_on(self) -> bool:
+        """The bathroom's "Heating on" switch is on (never in the cooling season)."""
+        return self.has_bathroom and bool(self.values.get("bath_on")) and self.season != SEASON_COOL
+
+    def _floor_on(self) -> bool:
+        if self.reason == "waiting" or not self.floor.entities:
+            return False
+        if self.regime == REGIME_HEAT and self.in_bath_period:
+            return True
+        return self._bath_on() or (self.boost and bool(self.values.get("boost_floor")))
 
     def _supports(self, entity_id: str, mode: str) -> bool:
         state = self.hass.states.get(entity_id)
@@ -627,7 +649,7 @@ class RoomController:
                 put(self.bath_heaters, "heat", self.bath_target)
             else:
                 put(self.bath_heaters, "off", None)
-            if self.regime == REGIME_HEAT and self.in_bath_period:
+            if self._floor_on():
                 floor_temp = self.floor.manual_target
                 put(
                     self.floor,
@@ -675,11 +697,20 @@ class RoomController:
         self._log_decision(plan)
         try:
             for entity_id, (group, mode, temp) in plan.items():
-                await self.driver.async_drive(group, entity_id, mode, temp)
+                # An A/C heating as part of a boost runs its fan at full speed.
+                boosting = group is self.coolers and mode == "heat" and self.cooler_boost
+                fan = "high" if boosting else "auto"
+                await self.driver.async_drive(group, entity_id, mode, temp, fan)
         finally:
             # Even if a device failed: the floor thermostat and the sensors stay current.
             if house := self._house():
                 house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
+                # the heat pump runs while any radiator of any room should heat
+                heating = any(
+                    group in (self.heaters, self.bath_heaters) and mode == "heat"
+                    for group, mode, _temp in plan.values()
+                )
+                house.set_heat_demand(self.entry.entry_id, heating)
             self._notify()
 
     def _log_decision(self, plan: dict[str, tuple[DeviceGroup, str, float | None]]) -> None:
@@ -736,7 +767,9 @@ class RoomController:
         return {
             "status": self.bath_status,
             "in_bath_period": self.in_bath_period,
-            "floor_heating": self.regime == REGIME_HEAT and self.in_bath_period,
+            "floor_heating": self._floor_on(),
+            "heating_on": self._bath_on(),
+            "heating_on_until": self.values.get("bath_on_until"),
             "manual_target": self.bath_heaters.manual_target,
             "manually_off": sorted(self.bath_heaters.manual_off | self.floor.manual_off),
         }

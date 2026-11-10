@@ -88,6 +88,7 @@ class ClimateDriver:
         self._ac_timeout = ac_timeout  # how long an A/C may take to report a new mode
         self._wake = wake  # asks the owner for an update cycle when that time is up
         self._pending: dict[str, _Pending] = {}
+        self._fan: dict[str, str] = {}  # entity_id -> fan mode wanted with the next command
         self._timers: dict[str, CALLBACK_TYPE] = {}
         self.driving: set[str] = set()
         self._own_contexts: deque[str] = deque(maxlen=200)
@@ -100,8 +101,15 @@ class ClimateDriver:
         )
 
     async def async_drive(
-        self, group: DeviceGroup, entity_id: str, mode: str, temp: float | None
+        self,
+        group: DeviceGroup,
+        entity_id: str,
+        mode: str,
+        temp: float | None,
+        fan: str = "auto",
     ) -> None:
+        """Drive one device. `fan`: the fan mode an A/C gets with its next command."""
+        self._fan[entity_id] = fan
         self.driving.add(entity_id)
         try:
             await self._async_drive(group, entity_id, mode, temp)
@@ -267,7 +275,7 @@ class ClimateDriver:
                 group, "set_temperature", {ATTR_ENTITY_ID: entity_id, "temperature": temp}
             )
         if switched or sent:
-            await self._async_fan_auto(group, entity_id)
+            await self._async_fan(group, entity_id)
         return "settings"
 
     def _clear_pending(self, entity_id: str) -> None:
@@ -295,16 +303,19 @@ class ClimateDriver:
             self._cancel_timer(entity_id)
         self._pending.clear()
 
-    async def _async_fan_auto(self, group: DeviceGroup, entity_id: str) -> None:
+    async def _async_fan(self, group: DeviceGroup, entity_id: str) -> None:
+        """Set the fan the A/C was asked for ("high" in a boost), else "auto"."""
         state = self.hass.states.get(entity_id)
         if state is None:
             return
-        auto = next(
-            (m for m in state.attributes.get("fan_modes") or [] if str(m).lower() == "auto"), None
-        )
-        if auto is not None and state.attributes.get("fan_mode") != auto:
+        modes = state.attributes.get("fan_modes") or []
+        for wanted in (self._fan.get(entity_id, "auto"), "auto"):
+            fan = next((m for m in modes if str(m).lower() == wanted), None)
+            if fan is not None:
+                break
+        if fan is not None and state.attributes.get("fan_mode") != fan:
             await self._async_call(
-                group, "set_fan_mode", {ATTR_ENTITY_ID: entity_id, "fan_mode": auto}
+                group, "set_fan_mode", {ATTR_ENTITY_ID: entity_id, "fan_mode": fan}
             )
 
     def failure_cleared(self, entity_id: str) -> None:

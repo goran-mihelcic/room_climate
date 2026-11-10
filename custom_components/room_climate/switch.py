@@ -1,4 +1,5 @@
-"""In use and Override switches for a room; Debug log file for the house."""
+"""Room: In use, Override, Boost with floor heating; bathroom: Heating on;
+house: Automatic control, Debug log file."""
 
 from __future__ import annotations
 
@@ -28,7 +29,12 @@ async def async_setup_entry(
     if isinstance(ctl, HouseController):
         async_add_entities([AutomaticSwitch(ctl), DebugLogSwitch(ctl)])
         return
-    async_add_entities([InUseSwitch(ctl), OverrideSwitch(ctl)])
+    entities: list[SwitchEntity] = [InUseSwitch(ctl), OverrideSwitch(ctl)]
+    if ctl.floor.entities:
+        entities.append(BoostFloorSwitch(ctl))
+    if ctl.has_bathroom:
+        entities.append(BathHeatingSwitch(ctl))
+    async_add_entities(entities)
 
 
 class AutomaticSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
@@ -123,27 +129,32 @@ class InUseSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         self._ctl.settings_changed()
 
 
-class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
-    """Temporary override temperature; expires after the override duration."""
+class TimedSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """On for the duration in `<minutes_key>` (0: until switched off), kept across restarts.
 
-    _attr_icon = "mdi:hand-back-right"
+    Its state lives in ctl.values[key] and ctl.values[f"{key}_until"].
+    """
 
-    def __init__(self, ctl: RoomController) -> None:
-        super().__init__(ctl, "override", "Override")
+    def __init__(
+        self, ctl: RoomController, key: str, name: str, minutes_key: str, bathroom: bool = False
+    ) -> None:
+        super().__init__(ctl, key, name, bathroom)
+        self._minutes_key = minutes_key
+        self._until_key = f"{key}_until"
         self._unsub_expiry: CALLBACK_TYPE | None = None
 
     @property
     def is_on(self) -> bool:
-        return bool(self._ctl.values["override"])
+        return bool(self._ctl.values[self._key])
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        until = self._ctl.values["override_until"]
+        until = self._ctl.values[self._until_key]
         return {"until": until.isoformat() if until else None}
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self._ctl.end_override = self._end  # used by the Resume automatic button
+        self._ctl.end_timers[self._key] = self._end  # used by the Resume automatic button
         last = await self.async_get_last_state()
         if last is None or last.state != "on":
             return
@@ -151,19 +162,19 @@ class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         until = dt_util.parse_datetime(until_raw) if until_raw else None
         if until is not None and until <= dt_util.utcnow():
             return  # expired while Home Assistant was down
-        self._ctl.values["override"] = True
-        self._ctl.values["override_until"] = until
+        self._ctl.values[self._key] = True
+        self._ctl.values[self._until_key] = until
         self._schedule_expiry(until)
 
     async def async_will_remove_from_hass(self) -> None:
-        self._ctl.end_override = None
+        self._ctl.end_timers.pop(self._key, None)
         self._cancel_expiry()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
-        minutes = float(self._ctl.values.get("override_minutes") or 0)
+        minutes = float(self._ctl.values.get(self._minutes_key) or 0)
         until = dt_util.utcnow() + timedelta(minutes=minutes) if minutes > 0 else None
-        self._ctl.values["override"] = True
-        self._ctl.values["override_until"] = until
+        self._ctl.values[self._key] = True
+        self._ctl.values[self._until_key] = until
         self._schedule_expiry(until)
         self.async_write_ha_state()
         self._ctl.settings_changed()
@@ -174,8 +185,8 @@ class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
     @callback
     def _end(self, _now: datetime | None = None) -> None:
         self._cancel_expiry()
-        self._ctl.values["override"] = False
-        self._ctl.values["override_until"] = None
+        self._ctl.values[self._key] = False
+        self._ctl.values[self._until_key] = None
         self.async_write_ha_state()
         self._ctl.settings_changed()
 
@@ -188,3 +199,56 @@ class OverrideSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         if self._unsub_expiry is not None:
             self._unsub_expiry()
             self._unsub_expiry = None
+
+
+class OverrideSwitch(TimedSwitch):
+    """Temporary override temperature; expires after the override duration."""
+
+    _attr_icon = "mdi:hand-back-right"
+
+    def __init__(self, ctl: RoomController) -> None:
+        super().__init__(ctl, "override", "Override", "override_minutes")
+
+
+class BathHeatingSwitch(TimedSwitch):
+    """Bathroom heating outside its schedule, for the Heating on duration.
+
+    Radiators at the bathroom comfort temperature while the room is heating; floor heating
+    in any season but cooling.
+    """
+
+    _attr_icon = "mdi:heat-wave"
+
+    def __init__(self, ctl: RoomController) -> None:
+        super().__init__(ctl, "bath_on", "Heating on", "bath_on_minutes", bathroom=True)
+
+
+class BoostFloorSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """Run the bathroom floor heating during a boost too."""
+
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_icon = "mdi:heating-coil"
+
+    def __init__(self, ctl: RoomController) -> None:
+        super().__init__(ctl, "boost_floor", "Boost with floor heating")
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._ctl.values["boost_floor"])
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        if last is not None and last.state in ("on", "off"):
+            self._ctl.values["boost_floor"] = last.state == "on"
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        self._set(False)
+
+    def _set(self, value: bool) -> None:
+        self._ctl.values["boost_floor"] = value
+        self.async_write_ha_state()
+        self._ctl.request_update()  # a setting, not a period change: manual state stays

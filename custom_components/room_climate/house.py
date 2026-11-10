@@ -113,6 +113,8 @@ class HouseController:
         self.pumps = DeviceGroup("pumps", KIND_HEAT, [])
         # room entry_id -> {floor thermostat: highest radiator setpoint, or None}
         self._demands: dict[str, dict[str, float | None]] = {}
+        # room entry_id -> any of its radiators (room or bathroom) is set to heat
+        self._heat_demands: dict[str, bool] = {}
         self.pump_targets: dict[str, float | None] = {}
         self._listeners: list[CALLBACK_TYPE] = []
         # Computed season (with an outdoor sensor)
@@ -375,8 +377,22 @@ class HouseController:
     # temperature while someone is home or the house is being prepared, off otherwise)
     # ------------------------------------------------------------------
     @property
-    def heating_needed(self) -> bool:
-        return self.read_season() in (SEASON_HEAT, SEASON_FROST) or self.preheat
+    def heating_needed(self) -> bool | None:
+        """Any room has radiators set to heat; None until every room has said so."""
+        if any(room_id not in self._heat_demands for room_id in get_data(self.hass).rooms):
+            return None  # start-up: don't switch off before every room has reported
+        return any(self._heat_demands.values())
+
+    @callback
+    def set_heat_demand(self, room_id: str, heating: bool | None) -> None:
+        """A room reports whether any of its radiators is set to heat (None: withdrawn)."""
+        before = self._heat_demands.get(room_id)
+        if heating is None:
+            self._heat_demands.pop(room_id, None)
+        else:
+            self._heat_demands[room_id] = heating
+        if heating != before:
+            self._check_heat_pump()
 
     @callback
     def _check_heat_pump(self) -> None:
@@ -389,9 +405,10 @@ class HouseController:
     def _kept_wanted(self, key: str) -> tuple[bool, float | None] | None:
         """(on, temperature) the device should have, or None to leave it alone."""
         if key == CONF_HEAT_PUMP:
-            if self.read_season() is None:
-                return None  # season not known yet
-            return self.heating_needed, None
+            needed = self.heating_needed
+            if self.read_season() is None or needed is None:
+                return None  # not known yet: leave the heat pump as it is
+            return needed, None
         on = self.read_at_home() or self.read_prepare()
         return on, float(self.values["hot_water_temp"]) if on else None
 

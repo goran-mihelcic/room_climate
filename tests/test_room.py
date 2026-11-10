@@ -681,7 +681,7 @@ async def test_boost_with_ac(hass, house, freezer) -> None:
     for e in (TRV_LR, TRV_DIN):
         assert _st(hass, e) == ("heat", 21.0)
     assert _st(hass, AC) == ("heat", 21.0)
-    assert hass.states.get(AC).attributes["fan_mode"] == "auto"
+    assert hass.states.get(AC).attributes["fan_mode"] == "high"  # full speed in a boost
     assert _status(hass) == "boost"
 
     # kid sets the AC to 30 during boost -> reverted, not adopted
@@ -694,6 +694,76 @@ async def test_boost_with_ac(hass, house, freezer) -> None:
     assert _st(hass, AC)[0] == "off"
     assert _st(hass, TRV_LR) == ("heat", 21.0)
     assert _status(hass) == "comfort"
+
+
+async def test_boost_with_floor_heating(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
+    await _setup(hass, freezer)
+    assert _status(hass) == "boost"
+    assert _st(hass, FLOOR)[0] == "off"  # not part of the boost by default
+    await _service(
+        hass, freezer, "switch", "turn_on", "switch.living_room_boost_with_floor_heating"
+    )
+    assert _st(hass, FLOOR) == ("heat", 27.0)
+    assert _st(hass, TRV_LR) == ("heat", 24.0)  # the boost method still applies
+    await _set(hass, freezer, TEMP, "20.8")  # boost ends: floor heating off again
+    assert _status(hass) == "comfort"
+    assert _st(hass, FLOOR)[0] == "off"
+
+
+BATH_ON = "switch.living_room_bathroom_heating_on"
+
+
+async def test_bathroom_heating_on_outside_its_schedule(hass, house, freezer) -> None:
+    await _setup(hass, freezer)  # 10:00, bathroom schedule off: follows the room
+    assert _st(hass, BATH_TRV) == ("heat", 21.0)
+    await _service(hass, freezer, "switch", "turn_on", BATH_ON)
+    assert _st(hass, BATH_TRV) == ("heat", 24.0)
+    assert _st(hass, FLOOR) == ("heat", 27.0)
+    assert _status(hass, "sensor.living_room_bathroom_status") == "heating_on"
+    # back to the schedule after the 60 minute default
+    await _later(hass, freezer, 61 * 60)
+    await _settle(hass, freezer)
+    assert hass.states.get(BATH_ON).state == "off"
+    assert _st(hass, BATH_TRV) == ("heat", 21.0)
+    assert _st(hass, FLOOR)[0] == "off"
+
+
+async def test_bathroom_heating_on_by_season(hass, house, freezer) -> None:
+    hass.states.async_set(SEASON, "Comfort")
+    await _setup(hass, freezer)
+    await _service(hass, freezer, "switch", "turn_on", BATH_ON)
+    # outside the heating season too: the heat pump follows the radiators that heat
+    assert _st(hass, FLOOR) == ("heat", 27.0)
+    assert _st(hass, BATH_TRV) == ("heat", 24.0)
+    assert _st(hass, TRV_LR)[0] == "off"  # only the bathroom
+    assert _status(hass, "sensor.living_room_bathroom_status") == "heating_on"
+    await _set(hass, freezer, SEASON, "Cooling")  # never in the cooling season
+    assert _st(hass, FLOOR)[0] == "off"
+    assert _st(hass, BATH_TRV)[0] == "off"
+
+
+async def test_heat_pump_follows_radiators_not_the_season(hass, house, freezer) -> None:
+    """Comfort season, nothing heats: heat pump off; bathroom Heating on: on, then off."""
+    hass.states.async_set(OUTDOOR, "20", {"device_class": "temperature"})  # comfort weather
+    hass.states.async_set(HEAT_PUMP, "on")
+    await _setup_computed(hass, freezer)
+    assert _season(hass).state == "comfort"
+    assert hass.states.get(HEAT_PUMP).state == "off"
+    await _service(hass, freezer, "switch", "turn_on", BATH_ON)
+    assert _st(hass, BATH_TRV) == ("heat", 24.0)
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    await _service(hass, freezer, "switch", "turn_off", BATH_ON)
+    assert hass.states.get(HEAT_PUMP).state == "off"
+
+
+async def test_resume_automatic_ends_bathroom_heating_on(hass, house, freezer) -> None:
+    await _setup(hass, freezer)
+    await _service(hass, freezer, "switch", "turn_on", BATH_ON)
+    assert _st(hass, FLOOR) == ("heat", 27.0)
+    await _service(hass, freezer, "button", "press", "button.living_room_resume_automatic")
+    assert hass.states.get(BATH_ON).state == "off"
+    assert _st(hass, FLOOR)[0] == "off"
 
 
 async def test_boost_both(hass, house, freezer) -> None:
@@ -1231,8 +1301,10 @@ async def test_cloud_commands_are_queued_with_a_pause(hass, house, freezer, monk
 async def test_climate_heat_pump_set_to_heat_and_off(hass, house, freezer) -> None:
     """A climate heat pump gets hvac_mode heat (not its last mode) and off."""
     _climate(hass, "climate.heat_pump", "cool", 45, modes=("off", "heat", "cool"))
+    # as at a restart: the room exists before the House decides (no stray "off" first)
+    await _add(hass, "Living Room", "room", ROOM_OPTIONS)
     await _add(hass, "House", "house", {**HOUSE_FORM, "heat_pump_entity": "climate.heat_pump"})
-    await _setup(hass, freezer, with_house=False)
+    await _settle(hass, freezer)
     assert hass.states.get("climate.heat_pump").state == "heat"  # cool counted as wrong
 
     await _outdoor(hass, freezer, 20)  # comfort weather

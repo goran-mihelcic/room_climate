@@ -105,6 +105,7 @@ BATH_STATUSES: Final = [
     "off",
     "frost_protection",
     "bath_period",
+    "heating_on",
     "follow_room",
     "manual",
     "paused",
@@ -171,6 +172,8 @@ AC_NUMBERS: Final = {
 BATH_NUMBERS: Final = {
     "bath_comfort": ("Comfort temperature", 15.0, 30.0, 0.5, 24.0, "°C"),
     "bath_floor_temp": ("Floor heating temperature", 15.0, 35.0, 0.5, 27.0, "°C"),
+    # how long the "Heating on" switch keeps the bathroom on; 0 = until switched off
+    "bath_on_minutes": ("Heating on duration", 0.0, 240.0, 15.0, 60.0, "min"),
 }
 # Shown under "Configuration" on the device page rather than "Controls".
 CONFIG_NUMBERS: Final = {
@@ -187,6 +190,7 @@ CONFIG_NUMBERS: Final = {
     "boost_margin",
     "correction_max",
     "override_minutes",
+    "bath_on_minutes",
     "ac_response",
     "heat_pump_response",
     "command_pause",
