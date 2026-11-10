@@ -1,4 +1,4 @@
-"""Room: In use, Override, Boost with floor heating; bathroom: Heating on;
+"""Room: In use, Override, Floor heating; bathroom: Heating on;
 house: Automatic control, Debug log file."""
 
 from __future__ import annotations
@@ -30,8 +30,8 @@ async def async_setup_entry(
         async_add_entities([AutomaticSwitch(ctl), DebugLogSwitch(ctl)])
         return
     entities: list[SwitchEntity] = [InUseSwitch(ctl), OverrideSwitch(ctl)]
-    if ctl.floor.entities:
-        entities.append(BoostFloorSwitch(ctl))
+    if ctl.room_floor.entities:
+        entities.append(FloorHeatingSwitch(ctl))
     if ctl.has_bathroom:
         entities.append(BathHeatingSwitch(ctl))
     async_add_entities(entities)
@@ -223,24 +223,23 @@ class BathHeatingSwitch(TimedSwitch):
         super().__init__(ctl, "bath_on", "Heating on", "bath_on_minutes", bathroom=True)
 
 
-class BoostFloorSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
-    """Run the bathroom floor heating during a boost too."""
+class FloorHeatingSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
+    """The room's floor heating also heats outside a boost, whenever the room heats."""
 
-    _attr_entity_category = EntityCategory.CONFIG
     _attr_icon = "mdi:heating-coil"
 
     def __init__(self, ctl: RoomController) -> None:
-        super().__init__(ctl, "boost_floor", "Boost with floor heating")
+        super().__init__(ctl, "floor_heating", "Floor heating")
 
     @property
     def is_on(self) -> bool:
-        return bool(self._ctl.values["boost_floor"])
+        return bool(self._ctl.values["floor_heating"])
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
         if last is not None and last.state in ("on", "off"):
-            self._ctl.values["boost_floor"] = last.state == "on"
+            self._ctl.values["floor_heating"] = last.state == "on"
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         self._set(True)
@@ -249,6 +248,6 @@ class BoostFloorSwitch(RoomClimateMixin, SwitchEntity, RestoreEntity):
         self._set(False)
 
     def _set(self, value: bool) -> None:
-        self._ctl.values["boost_floor"] = value
+        self._ctl.values["floor_heating"] = value
         self.async_write_ha_state()
-        self._ctl.request_update()  # a setting, not a period change: manual state stays
+        self._ctl.request_update()  # resets only the floor heating's manual state

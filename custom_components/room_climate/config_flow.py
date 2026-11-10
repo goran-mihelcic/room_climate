@@ -32,6 +32,7 @@ from .const import (
     CONF_OUTDOOR,
     CONF_PREPARE,
     CONF_REFERENCE,
+    CONF_ROOM_FLOOR,
     CONF_SCHEDULE,
     CONF_TEMP_SENSOR,
     DEFAULT_COOL_MAX,
@@ -88,6 +89,7 @@ ROOM_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_HEATERS): _climate(True),
         vol.Optional(CONF_COOLERS): _climate(True),
+        vol.Optional(CONF_ROOM_FLOOR): _climate(False),
         vol.Optional(CONF_FLOOR_THERMOSTAT): _climate(False),
         vol.Optional(CONF_SCHEDULE): _entity(SCHEDULE_DOMAINS),
         vol.Optional(CONF_TEMP_SENSOR): _entity("sensor", "temperature"),
@@ -139,6 +141,11 @@ def _validate_room(user_input: dict[str, Any]) -> dict[str, str]:
     room_devices = set(user_input.get(CONF_HEATERS, [])) | set(user_input.get(CONF_COOLERS, []))
     if set(user_input.get(CONF_HEATERS, [])) & set(user_input.get(CONF_COOLERS, [])):
         errors[CONF_COOLERS] = "overlap"
+    floor = user_input.get(CONF_ROOM_FLOOR)
+    if floor and floor in room_devices:
+        errors[CONF_ROOM_FLOOR] = "floor_overlap"
+    if floor:
+        room_devices.add(floor)
     if user_input.get(CONF_FLOOR_THERMOSTAT) in room_devices:
         errors[CONF_FLOOR_THERMOSTAT] = "thermostat_overlap"
     return errors
@@ -151,6 +158,8 @@ def _validate_bath(room: dict[str, Any], user_input: dict[str, Any]) -> dict[str
     room_devices = set(room.get(CONF_HEATERS, [])) | set(room.get(CONF_COOLERS, []))
     if thermostat := room.get(CONF_FLOOR_THERMOSTAT):
         room_devices.add(thermostat)
+    if floor := room.get(CONF_ROOM_FLOOR):
+        room_devices.add(floor)
     bath_devices = set(user_input.get(CONF_BATH_HEATERS, []))
     if floor := user_input.get(CONF_BATH_FLOOR):
         bath_devices.add(floor)

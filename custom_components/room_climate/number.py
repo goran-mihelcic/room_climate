@@ -14,6 +14,7 @@ from .const import (
     CONF_HEAT_PUMP,
     CONF_HOT_WATER,
     CONFIG_NUMBERS,
+    FLOOR_NUMBERS,
     HEAT_PUMP_NUMBERS,
     HOT_WATER_NUMBERS,
     HOUSE_NUMBERS,
@@ -41,6 +42,8 @@ async def async_setup_entry(
     entities = [RoomNumber(ctl, key, spec, False) for key, spec in ROOM_NUMBERS.items()]
     if ctl.coolers.entities:
         entities += [RoomNumber(ctl, key, spec, False) for key, spec in AC_NUMBERS.items()]
+    if ctl.room_floor.entities:
+        entities += [RoomNumber(ctl, key, spec, False) for key, spec in FLOOR_NUMBERS.items()]
     if ctl.has_bathroom:
         entities += [RoomNumber(ctl, key, spec, True) for key, spec in BATH_NUMBERS.items()]
     async_add_entities(entities)

@@ -31,6 +31,7 @@
           "name": "Room name",
           "heaters": "Radiators",
           "coolers": "Air conditioners",
+          "room_floor": "Floor heating",
           "floor_thermostat": "Floor thermostat (pump)",
           "schedule": "Schedule",
           "temperature_sensor": "Room temperature sensor",
@@ -43,6 +44,7 @@
           "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
+          "room_floor": "Optional. The room's own floor heating thermostat: on during a boost that uses floor heating, or while the room heats with its Floor heating switch on.",
           "floor_thermostat": "Optional. Set to the highest radiator setpoint of all rooms on the same thermostat.",
           "schedule": "Optional schedule helper. On: comfort temperature and cooling. Off: eco temperature, A/C off. Without one the room is always on schedule.",
           "temperature_sensor": "Optional. Radiators reading higher than this sensor are corrected. Without it the radiators' own readings are used.",
@@ -68,7 +70,8 @@
       "no_heaters": "Select at least one radiator.",
       "bad_range": "The highest value must be at least the lowest value.",
       "overlap": "A device cannot be both a radiator and an air conditioner.",
-      "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
+      "thermostat_overlap": "The floor thermostat (pump) must not also be a radiator, air conditioner or floor heating.",
+      "floor_overlap": "The floor heating must not also be a radiator or air conditioner.",
       "no_bath_devices": "Select a bathroom radiator or floor heating.",
       "bath_overlap": "Bathroom devices must not also be room devices.",
       "unknown_notify": "No notify action or notify entity with this name."
@@ -103,6 +106,7 @@
         "data": {
           "heaters": "Radiators",
           "coolers": "Air conditioners",
+          "room_floor": "Floor heating",
           "floor_thermostat": "Floor thermostat (pump)",
           "schedule": "Schedule",
           "temperature_sensor": "Room temperature sensor",
@@ -115,6 +119,7 @@
           "has_bathroom": "Room has a bathroom"
         },
         "data_description": {
+          "room_floor": "The room's own floor heating thermostat: on during a boost that uses floor heating, or while the room heats with its Floor heating switch on.",
           "floor_thermostat": "Set to the highest radiator setpoint of all rooms on the same thermostat.",
           "schedule": "On: comfort temperature and cooling. Off: eco temperature, A/C off.",
           "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
@@ -134,7 +139,8 @@
       "no_heaters": "Select at least one radiator.",
       "bad_range": "The highest value must be at least the lowest value.",
       "overlap": "A device cannot be both a radiator and an air conditioner.",
-      "thermostat_overlap": "The floor thermostat must not also be a radiator or air conditioner.",
+      "thermostat_overlap": "The floor thermostat (pump) must not also be a radiator, air conditioner or floor heating.",
+      "floor_overlap": "The floor heating must not also be a radiator or air conditioner.",
       "no_bath_devices": "Select a bathroom radiator or floor heating.",
       "bath_overlap": "Bathroom devices must not also be room devices.",
       "unknown_notify": "No notify action or notify entity with this name."
@@ -193,7 +199,11 @@
         "state": {
           "heaters": "Raise radiator setpoints",
           "coolers": "A/C in heat mode",
-          "both": "Both"
+          "both": "Radiators and A/C",
+          "floor": "Floor heating",
+          "heaters_floor": "Radiators and floor heating",
+          "coolers_floor": "A/C and floor heating",
+          "all": "Radiators, A/C and floor heating"
         }
       }
     }

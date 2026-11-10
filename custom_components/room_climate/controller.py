@@ -29,9 +29,8 @@ from homeassistant.helpers.start import async_at_started
 from .const import (
     AC_NUMBERS,
     BATH_NUMBERS,
-    BOOST_BOTH,
-    BOOST_COOLERS,
     BOOST_HEATERS,
+    BOOST_PARTS,
     COMMAND_GRACE_SECONDS,
     CONF_BATH_FLOOR,
     CONF_BATH_HEATERS,
@@ -46,6 +45,7 @@ from .const import (
     CONF_HEATERS,
     CONF_HUMIDITY_SENSOR,
     CONF_MANUAL_POLICY,
+    CONF_ROOM_FLOOR,
     CONF_SCHEDULE,
     CONF_TEMP_SENSOR,
     CORRECTION_STEP,
@@ -56,6 +56,7 @@ from .const import (
     DEFAULT_HEAT_MAX,
     DEFAULT_HEAT_MIN,
     DOMAIN,
+    FLOOR_NUMBERS,
     ON_STATES,
     POLICY_FOLLOW,
     REGIME_COOL,
@@ -107,8 +108,10 @@ class RoomController:
             list(opts.get(CONF_BATH_HEATERS, []) if self.has_bathroom else []),
         )
         floor = opts.get(CONF_BATH_FLOOR) if self.has_bathroom else None
-        self.floor = DeviceGroup("floor", KIND_FLOOR, [floor] if floor else [])
-        self.groups = [self.heaters, self.coolers, self.bath_heaters, self.floor]
+        self.floor = DeviceGroup("floor", KIND_FLOOR, [floor] if floor else [])  # bathroom's
+        room_floor = opts.get(CONF_ROOM_FLOOR)
+        self.room_floor = DeviceGroup("room_floor", KIND_FLOOR, [room_floor] if room_floor else [])
+        self.groups = [self.heaters, self.coolers, self.room_floor, self.bath_heaters, self.floor]
         self._entity_group: dict[str, DeviceGroup] = {}
         for group in self.groups:
             for entity_id in group.entities:
@@ -118,7 +121,9 @@ class RoomController:
         self.values: dict[str, Any] = {k: v[4] for k, v in ROOM_NUMBERS.items()}
         self.values.update({"in_use": True, "override": False, "override_until": None})
         self.values["boost_method"] = BOOST_HEATERS
-        self.values["boost_floor"] = False  # Boost with floor heating switch
+        if self.room_floor.entities:
+            self.values.update({k: v[4] for k, v in FLOOR_NUMBERS.items()})
+            self.values["floor_heating"] = False  # Floor heating switch: heat with the room
         if self.has_bathroom:
             self.values.update({k: v[4] for k, v in BATH_NUMBERS.items()})
             self.values.update({"bath_on": False, "bath_on_until": None})  # Heating on
@@ -176,9 +181,35 @@ class RoomController:
         )
 
     @property
+    def boost_methods(self) -> list[str]:
+        """The boost methods this room's devices allow, in the order the select shows them."""
+        have = set()
+        if self.heaters.entities:
+            have.add("heaters")
+        if self.coolers.entities:
+            have.add("coolers")
+        if self.room_floor.entities or self.floor.entities:
+            have.add("floor")
+        return [method for method, parts in BOOST_PARTS.items() if parts <= have]
+
+    @property
     def boost_method(self) -> str:
+        """The chosen method, reduced to the devices the room has (e.g. after Configure)."""
         method = self.values["boost_method"]
-        return method if self.coolers.entities else BOOST_HEATERS
+        available = self.boost_methods
+        if method in available:
+            return method
+        parts = BOOST_PARTS.get(method, frozenset()) & set().union(
+            *(BOOST_PARTS[m] for m in available)
+        )
+        for candidate in available:
+            if BOOST_PARTS[candidate] == parts:
+                return candidate
+        return available[0] if available else BOOST_HEATERS
+
+    @property
+    def boost_parts(self) -> frozenset[str]:
+        return BOOST_PARTS[self.boost_method] if self.boost else frozenset()
 
     def _house(self) -> HouseController | None:
         return get_data(self.hass).house
@@ -481,6 +512,7 @@ class RoomController:
         for group, key in (
             (self.heaters, room_key),
             (self.coolers, room_key),
+            (self.room_floor, (*room_key, v.get("floor_heating"))),
             (self.bath_heaters, bath_key),
             (self.floor, bath_key),
         ):
@@ -522,8 +554,8 @@ class RoomController:
                 self.boost = False
         else:
             self.boost = False
-        raise_heaters = self.boost and self.boost_method in (BOOST_HEATERS, BOOST_BOTH)
-        self.cooler_boost = self.boost and self.boost_method in (BOOST_COOLERS, BOOST_BOTH)
+        raise_heaters = "heaters" in self.boost_parts
+        self.cooler_boost = "coolers" in self.boost_parts
         self.heater_setpoint = (
             target + v["boost_offset"] if (raise_heaters and target is not None) else target
         )
@@ -579,11 +611,23 @@ class RoomController:
         return self.has_bathroom and bool(self.values.get("bath_on")) and self.season != SEASON_COOL
 
     def _floor_on(self) -> bool:
+        """The bathroom's floor heating."""
         if self.reason == "waiting" or not self.floor.entities:
             return False
         if self.regime == REGIME_HEAT and self.in_bath_period:
             return True
-        return self._bath_on() or (self.boost and bool(self.values.get("boost_floor")))
+        # A boost uses the bathroom floor only in a room without floor heating of its own.
+        boost = "floor" in self.boost_parts and not self.room_floor.entities
+        return self._bath_on() or boost
+
+    def _room_floor_on(self) -> bool:
+        """The room's own floor heating: in a boost that uses it, or with its switch on."""
+        if self.reason == "waiting" or not self.room_floor.entities:
+            return False
+        if "floor" in self.boost_parts:
+            return True
+        heating = self.regime in (REGIME_HEAT, REGIME_PREHEAT)
+        return heating and bool(self.values.get("floor_heating"))
 
     def _supports(self, entity_id: str, mode: str) -> bool:
         state = self.hass.states.get(entity_id)
@@ -643,6 +687,17 @@ class RoomController:
         else:
             put(self.heaters, "off", None)
             coolers_idle()
+
+        if self.room_floor.entities:
+            if self._room_floor_on():
+                floor_temp = self.room_floor.manual_target
+                put(
+                    self.room_floor,
+                    "heat",
+                    floor_temp if floor_temp is not None else self.values["floor_temp"],
+                )
+            else:
+                put(self.room_floor, "off", None)
 
         if self.has_bathroom:
             if self.bath_target is not None:
@@ -707,7 +762,7 @@ class RoomController:
                 house.set_pump_demand(self.entry.entry_id, self._pump_demand(plan))
                 # the heat pump runs while any radiator of any room should heat
                 heating = any(
-                    group in (self.heaters, self.bath_heaters) and mode == "heat"
+                    group in (self.heaters, self.bath_heaters, self.room_floor) and mode == "heat"
                     for group, mode, _temp in plan.values()
                 )
                 house.set_heat_demand(self.entry.entry_id, heating)
@@ -757,8 +812,11 @@ class RoomController:
             "radiator_corrections": dict(self.corrections),
             "drying": self.drying,
             "floor_thermostat": self.thermostat,
+            "floor_heating": self._room_floor_on() if self.room_floor.entities else None,
             "manual_target": manual,
-            "manually_off": sorted(self.heaters.manual_off | self.coolers.manual_off),
+            "manually_off": sorted(
+                self.heaters.manual_off | self.coolers.manual_off | self.room_floor.manual_off
+            ),
             "override": self.values["override"],
             "override_until": self.values["override_until"],
         }

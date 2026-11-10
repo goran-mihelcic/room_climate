@@ -31,6 +31,7 @@ THERMO = "climate.smart_thermostat_x"
 AC = "climate.living_room_air"
 BATH_TRV = "climate.bath3_radiator"
 FLOOR = "climate.floor_heating_bth3"
+ROOM_FLOOR = "climate.floor_heating_lr"
 
 SEASON = "input_select.hvac_season"
 AT_HOME = "input_boolean.at_home"
@@ -105,7 +106,7 @@ async def house(hass: HomeAssistant, freezer):
     freezer.move_to("2026-11-03 10:00:00+01:00")
     ctl_mod.COMMAND_GRACE_SECONDS = 0
 
-    for e in (THERMO, TRV_LR, TRV_DIN, TRV_BED, BATH_TRV, FLOOR):
+    for e in (THERMO, TRV_LR, TRV_DIN, TRV_BED, BATH_TRV, FLOOR, ROOM_FLOOR):
         _climate(hass, e, "off", 15)
     _climate(
         hass,
@@ -314,6 +315,11 @@ async def test_config_flow_errors(hass: HomeAssistant, house) -> None:
     for change, error in (
         ({"coolers": [TRV_LR]}, {"coolers": "overlap"}),
         ({"floor_thermostat": TRV_DIN}, {"floor_thermostat": "thermostat_overlap"}),
+        ({"room_floor": TRV_DIN}, {"room_floor": "floor_overlap"}),
+        (
+            {"room_floor": ROOM_FLOOR, "floor_thermostat": ROOM_FLOOR},
+            {"floor_thermostat": "thermostat_overlap"},
+        ),
     ):
         result = await hass.config_entries.flow.async_init(
             DOMAIN, context={"source": config_entries.SOURCE_USER}
@@ -696,19 +702,99 @@ async def test_boost_with_ac(hass, house, freezer) -> None:
     assert _status(hass) == "comfort"
 
 
-async def test_boost_with_floor_heating(hass, house, freezer) -> None:
+BOOST_SELECT = "select.living_room_boost_method"
+FLOOR_SWITCH = "switch.living_room_floor_heating"
+
+
+async def test_boost_with_bathroom_floor_heating(hass, house, freezer) -> None:
+    """A room without floor heating of its own boosts with its bathroom's floor."""
     hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
     await _setup(hass, freezer)
+    assert hass.states.get(BOOST_SELECT).attributes["options"] == [
+        "heaters",
+        "coolers",
+        "floor",
+        "both",
+        "heaters_floor",
+        "coolers_floor",
+        "all",
+    ]
+    assert hass.states.get(FLOOR_SWITCH) is None  # no floor heating in the room itself
     assert _status(hass) == "boost"
     assert _st(hass, FLOOR)[0] == "off"  # not part of the boost by default
-    await _service(
-        hass, freezer, "switch", "turn_on", "switch.living_room_boost_with_floor_heating"
-    )
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="heaters_floor")
     assert _st(hass, FLOOR) == ("heat", 27.0)
-    assert _st(hass, TRV_LR) == ("heat", 24.0)  # the boost method still applies
+    assert _st(hass, TRV_LR) == ("heat", 24.0)  # radiators raised as well
     await _set(hass, freezer, TEMP, "20.8")  # boost ends: floor heating off again
     assert _status(hass) == "comfort"
     assert _st(hass, FLOOR)[0] == "off"
+
+
+async def test_room_floor_heating_in_a_boost(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
+    await _setup(hass, freezer, room_floor=ROOM_FLOOR)
+    assert _status(hass) == "boost"
+    assert _st(hass, ROOM_FLOOR)[0] == "off"  # default method: radiators only
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="floor")
+    assert _st(hass, ROOM_FLOOR) == ("heat", 27.0)
+    assert _st(hass, TRV_LR) == ("heat", 21.0)  # not raised: the method is floor only
+    assert _st(hass, AC)[0] == "off"
+    assert _st(hass, FLOOR)[0] == "off"  # the bathroom floor is not used for the room
+    assert hass.states.get("sensor.living_room_target_temperature").attributes["floor_heating"]
+    await _set(hass, freezer, TEMP, "20.8")
+    assert _status(hass) == "comfort"
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+
+
+async def test_room_floor_heating_switch(hass, house, freezer) -> None:
+    """Outside a boost the floor heats whenever the room heats, if its switch is on."""
+    await _setup(hass, freezer, room_floor=ROOM_FLOOR)
+    assert _status(hass) == "comfort"
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+    await _service(hass, freezer, "switch", "turn_on", FLOOR_SWITCH)
+    assert _st(hass, ROOM_FLOOR) == ("heat", 27.0)
+    await _service(
+        hass,
+        freezer,
+        "number",
+        "set_value",
+        "number.living_room_floor_heating_temperature",
+        value=25,
+    )
+    assert _st(hass, ROOM_FLOOR) == ("heat", 25.0)
+    await _set(hass, freezer, SCHEDULE, "off")  # eco: the room still heats
+    assert _st(hass, ROOM_FLOOR) == ("heat", 25.0)
+    await _set(hass, freezer, SEASON, "Cooling")  # the room doesn't heat: floor off
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+    await _set(hass, freezer, SEASON, "Heating")
+    assert _st(hass, ROOM_FLOOR) == ("heat", 25.0)
+    await _service(hass, freezer, "switch", "turn_off", FLOOR_SWITCH)
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+
+
+async def test_boost_select_with_floor_heating_but_no_ac(hass, house, freezer) -> None:
+    await _setup(hass, freezer, coolers=[], has_bathroom=False, room_floor=ROOM_FLOOR)
+    assert hass.states.get(BOOST_SELECT).attributes["options"] == [
+        "heaters",
+        "floor",
+        "heaters_floor",
+    ]
+
+
+async def test_retired_boost_floor_switch_is_removed(hass, house, freezer) -> None:
+    """The 1.1.0 'Boost with floor heating' switch is replaced by the Boost method select."""
+    await _add(hass, "House", "house", HOUSE_OPTIONS)
+    entry = MockConfigEntry(
+        domain=DOMAIN, title="Living Room", version=2, data={"type": "room"}, options=ROOM_OPTIONS
+    )
+    entry.add_to_hass(hass)
+    registry = er.async_get(hass)
+    registry.async_get_or_create(
+        "switch", DOMAIN, f"{entry.entry_id}_boost_floor", config_entry=entry
+    )
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await _settle(hass, freezer)
+    assert registry.async_get_entity_id("switch", DOMAIN, f"{entry.entry_id}_boost_floor") is None
 
 
 BATH_ON = "switch.living_room_bathroom_heating_on"

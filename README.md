@@ -1,10 +1,10 @@
 # Room Climate
 
-A Home Assistant custom integration for a house with a heat pump, radiators with smart thermostatic heads (Tado X), floor (pump) thermostats, air conditioners and bathrooms with electric floor heating.
+A Home Assistant custom integration for a house with a heat pump, radiators with smart thermostatic heads (Tado X), floor (pump) thermostats, air conditioners, floor heating and bathrooms with electric floor heating.
 
 It creates one **House** device and one device per **room** (plus a linked bathroom device). It follows the house HVAC season, heats and cools each room on its own schedule, boosts cold rooms, dries humid rooms with the A/C, keeps the floor thermostats running while any radiator on them needs heat, and handles changes people make on remotes and thermostats.
 
-The heat pump itself is not driven by this integration; switch it from the HVAC season with your own automation.
+The House can also switch the heat pump and hot water (see [Heat pump](#heat-pump)).
 
 ## Install
 
@@ -36,6 +36,7 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 |---|---|---|
 | Radiators | `climate.smart_radiator_thermostat_lr`, `climate.smart_radiator_thermostat_dining` | required |
 | Air conditioners | `climate.living_room_air` | optional |
+| Floor heating | `climate.floor_heating_living_room` | optional; the room's own floor heating (see [Floor heating](#floor-heating)) |
 | Floor thermostat (pump) | `climate.smart_thermostat_x` | optional; the thermostat that runs this floor's radiator pump |
 | Schedule | `schedule.living_room` | optional [schedule helper](https://www.home-assistant.io/integrations/schedule/); without one the room is always on schedule |
 | Room temperature sensor | `sensor.living_room_temperature` | optional; without it the radiators' own readings are used |
@@ -107,13 +108,23 @@ With no radiator heating (cooling or comfort season) the thermostat is switched 
 
 ### Boost
 
-In the heating season, when the room is more than *Boost threshold* below its target, boost starts. It ends when the room is within *Boost exit margin* of the target (default 0.3 °C). The **Boost method** selector (rooms with an A/C) decides how:
+In the heating season, when the room is more than *Boost threshold* below its target, boost starts. It ends when the room is within *Boost exit margin* of the target (default 0.3 °C). The **Boost method** select (Configuration on the room device; rooms with an A/C or floor heating) decides what the boost uses. It offers only what the room has:
 
-- *Raise radiator setpoints:* radiators get target + boost offset, capped at each device's max.
-- *A/C in heat mode:* radiators stay at the target and the A/C heats to the target until boost ends, then switches off. Setpoint changes on the A/C during boost are reverted.
-- *Both.*
+- *Raise radiator setpoints* (default): radiators get target + boost offset, capped at each device's max.
+- *A/C in heat mode:* the A/C heats to the target until boost ends, then switches off; its fan runs at *high*. Setpoint changes on the A/C during boost are reverted.
+- *Floor heating:* the floor heating runs at its *Floor heating temperature* until boost ends. That is the room's own floor heating, or its bathroom's if the room has none.
+- *Radiators and A/C*, *Radiators and floor heating*, *A/C and floor heating*, *Radiators, A/C and floor heating*.
 
-**Boost with floor heating** (switch, rooms with bathroom floor heating, off by default): the bathroom floor heating also runs at its floor heating temperature during a boost, whatever its schedule. An A/C heating in a boost runs its fan at *high*.
+Radiators not raised by the boost stay at the target.
+
+### Floor heating
+
+A room can have floor heating of its own (*Floor heating* in the room setup; the bathroom's floor heating is set in the bathroom step). It is off unless:
+
+- a boost uses it (see *Boost method*), or
+- its **Floor heating** switch (room device, off by default) is on: then it also heats whenever the room heats: comfort, eco and pre-heat. Not in frost protection, comfort season or cooling.
+
+It is set to the room's *Floor heating temperature* (27 °C). A setpoint changed on its thermostat is kept until the next period change. It counts as heating for the heat pump.
 
 ### Drying
 
@@ -190,8 +201,8 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`, `paused`).
-- Controls: *Resume automatic* (button), *In use*, *Override*, *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
-- Configuration: *Boost method* and *A/C response time* (60 s) (rooms with an A/C), *Boost with floor heating* (off; rooms with bathroom floor heating), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
+- Controls: *Resume automatic* (button), *In use*, *Override*, *Floor heating* and *Floor heating temperature* (27 °C) (rooms with floor heating), *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
+- Configuration: *Boost method* (rooms with an A/C or floor heating), *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**
 - *Target temperature*, *Status* (`bath_period`, `heating_on`, `follow_room`, `manual`, `frost_protection`, `off`, `waiting`, `paused`), *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C), *Heating on* switch, *Heating on duration* (60 min).

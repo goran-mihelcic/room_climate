@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-84 passed in 7.9s
+88 passed in 8.0s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -123,7 +123,8 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Schedules | comfort/eco from the room schedule, A/C off outside it, bathroom schedule and floor heating, bathroom Heating on outside the schedule (timed; radiators and floor in any season but cooling; ended by Resume automatic) |
 | Radiator correction | radiator reading high is corrected, whole 0.5 °C steps, cap, one shared correction per room, heads that copy each other (Tado room) neither ratchet nor ping-pong, copied setpoint not manual, manual change on a corrected or boosted radiator, no correction without a room sensor |
 | Floor thermostat | highest radiator setpoint across rooms and bathroom, off when nothing heats |
-| Boost | raise radiators, A/C in heat mode (fan high), both, with floor heating, hysteresis, configurable exit margin, select on the device |
+| Boost | raise radiators, A/C in heat mode (fan high), floor heating (room's own, else the bathroom's) and every combination, select offers only what the room has, hysteresis, configurable exit margin |
+| Room floor heating | off by default, on in a boost that uses it or while the room heats with its Floor heating switch on, floor heating temperature, retired 1.1.0 switch removed |
 | A/C commands | desired state kept, mode → temperature → fan auto, a slow temperature report waited for and not re-sent, a temperature not followed re-sent and reported once, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once (notify action or notify entity), recovered |
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
 | Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |

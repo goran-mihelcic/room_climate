@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_ENTRY_TYPE, DOMAIN, TYPE_HOUSE
 from .controller import RoomController
@@ -34,6 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: RoomClimateConfigEntry) 
         controller = RoomController(hass, entry)
     entry.runtime_data = controller
     _async_register_devices(hass, entry, controller)
+    _async_remove_retired_entities(hass, entry)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     await controller.async_start()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
@@ -62,6 +64,14 @@ def _async_register_devices(
     for device in dr.async_entries_for_config_entry(devices, entry.entry_id):
         if bath_id in device.identifiers:  # bathroom removed in Configure
             devices.async_remove_device(device.id)
+
+
+def _async_remove_retired_entities(hass: HomeAssistant, entry: RoomClimateConfigEntry) -> None:
+    """Entities that a newer version no longer creates, so they don't linger unavailable."""
+    entities = er.async_get(hass)
+    # 1.1.0 "Boost with floor heating" switch: replaced by the Boost method select in 1.2.0
+    if entity_id := entities.async_get_entity_id("switch", DOMAIN, f"{entry.entry_id}_boost_floor"):
+        entities.async_remove(entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: RoomClimateConfigEntry) -> bool:

@@ -26,6 +26,7 @@ CONF_SEASON: Final = "season_entity"
 CONF_HEATERS: Final = "heaters"
 CONF_COOLERS: Final = "coolers"
 CONF_FLOOR_THERMOSTAT: Final = "floor_thermostat"
+CONF_ROOM_FLOOR: Final = "room_floor"  # floor heating of the room itself (from 1.2)
 CONF_SCHEDULE: Final = "schedule"
 CONF_TEMP_SENSOR: Final = "temperature_sensor"
 CONF_HUMIDITY_SENSOR: Final = "humidity_sensor"
@@ -41,7 +42,21 @@ CONF_BATH_SCHEDULE: Final = "bath_schedule"
 
 BOOST_HEATERS: Final = "heaters"  # raise radiator setpoints by the boost offset
 BOOST_COOLERS: Final = "coolers"  # run the A/C in heat mode
-BOOST_BOTH: Final = "both"
+BOOST_BOTH: Final = "both"  # radiators and A/C
+BOOST_FLOOR: Final = "floor"  # floor heating on (from 1.2)
+BOOST_HEATERS_FLOOR: Final = "heaters_floor"
+BOOST_COOLERS_FLOOR: Final = "coolers_floor"
+BOOST_ALL: Final = "all"
+# What each boost method uses, in the order the select offers them.
+BOOST_PARTS: Final = {
+    BOOST_HEATERS: frozenset({"heaters"}),
+    BOOST_COOLERS: frozenset({"coolers"}),
+    BOOST_FLOOR: frozenset({"floor"}),
+    BOOST_BOTH: frozenset({"heaters", "coolers"}),
+    BOOST_HEATERS_FLOOR: frozenset({"heaters", "floor"}),
+    BOOST_COOLERS_FLOOR: frozenset({"coolers", "floor"}),
+    BOOST_ALL: frozenset({"heaters", "coolers", "floor"}),
+}
 
 POLICY_FOLLOW: Final = "follow"
 POLICY_BLOCK: Final = "block"
@@ -168,6 +183,10 @@ DEFAULT_AC_RESPONSE_SECONDS: Final = 60.0
 # Only for rooms with an A/C.
 AC_NUMBERS: Final = {
     "ac_response": ("A/C response time", 3.0, 600.0, 1.0, DEFAULT_AC_RESPONSE_SECONDS, "s"),
+}
+# Only for rooms with their own floor heating.
+FLOOR_NUMBERS: Final = {
+    "floor_temp": ("Floor heating temperature", 15.0, 35.0, 0.5, 27.0, "°C"),
 }
 BATH_NUMBERS: Final = {
     "bath_comfort": ("Comfort temperature", 15.0, 30.0, 0.5, 24.0, "°C"),
