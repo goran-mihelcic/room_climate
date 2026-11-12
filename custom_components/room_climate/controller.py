@@ -838,9 +838,13 @@ class RoomController:
             entity_id: mode if temp is None else f"{mode} {temp:.1f}"
             for entity_id, (_group, mode, temp) in plan.items()
         }
+        dry = ""
+        if (house := self._house()) is not None and self.coolers.entities:
+            on, hyst = house.values["dry_humidity"], house.values["dry_hysteresis"]
+            dry = f"(dry above {on:g}, until {on - hyst:g}) "
         decision = (
             f"{self.room_status} ({self.regime}, {self.reason}) target={self.room_target} "
-            f"room={self.room_temperature} humidity={self.humidity} "
+            f"room={self.room_temperature} humidity={self.humidity} {dry}"
             f"season={self.season} at_home={self.at_home} prepare={self.prepare} "
             f"in_schedule={self.in_schedule} boost={self.boost} drying={self.drying} "
             f"corrections={self.corrections} bath={self.bath_status}/{self.bath_target} "

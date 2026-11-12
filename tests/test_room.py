@@ -1777,3 +1777,35 @@ async def test_follow_policy_still_reverts_a_device_turned_on(hass, house, freez
     await _set(hass, freezer, AC, "heat", temperature=26)
     await _settle(hass, freezer, seconds=61)
     assert _st(hass, AC)[0] == "off"
+
+
+async def test_manual_control_floor_heating_turned_on_without_a_boost(hass, house, freezer) -> None:
+    await _setup(hass, freezer, manual_policy="manual", room_floor=ROOM_FLOOR)
+    assert _status(hass) == "comfort"  # no boost needed
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+    await _set(hass, freezer, ROOM_FLOOR, "heat", temperature=28)  # on at its thermostat
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, ROOM_FLOOR) == ("heat", 28.0)
+    assert _status(hass) == "manual_control"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)  # radiators stay automatic
+    await _set(hass, freezer, SCHEDULE, "off")
+    assert _st(hass, ROOM_FLOOR)[0] == "off"
+
+
+async def test_raising_the_drying_threshold_stops_drying(hass, house, freezer) -> None:
+    hass.states.async_set(SEASON, "Comfort")
+    hass.states.async_set(HUMIDITY, "67", {"device_class": "humidity"})
+    await _setup(hass, freezer)
+    assert _st(hass, AC)[0] == "dry"  # 67 % > 65 %
+    await _service(
+        hass,
+        freezer,
+        "number",
+        "set_value",
+        "number.house_drying_humidity_threshold",
+        value=75,
+    )
+    assert _st(hass, AC)[0] == "off"  # 67 % <= 75 - 5 %
+    assert _status(hass) == "off"
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, AC)[0] == "off"

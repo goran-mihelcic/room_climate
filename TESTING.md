@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-94 passed in 7.4s
+96 passed in 6.9s
 ```
 
 Run **format, lint and tests** before every commit.

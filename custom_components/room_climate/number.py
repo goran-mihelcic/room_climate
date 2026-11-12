@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from homeassistant.components.number import NumberMode, RestoreNumber
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -23,6 +25,8 @@ from .const import (
 from .controller import RoomController
 from .entity import RoomClimateMixin
 from .house import HouseController
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -76,6 +80,7 @@ class RoomNumber(RoomClimateMixin, RestoreNumber):
         self._ctl.values[self._key] = self._attr_native_value
 
     async def async_set_native_value(self, value: float) -> None:
+        _LOGGER.info("%s: %s set to %s", self._ctl.entry.title, self._attr_name, value)
         self._attr_native_value = value
         self._ctl.values[self._key] = value
         self.async_write_ha_state()
