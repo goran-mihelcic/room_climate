@@ -145,6 +145,7 @@ class RoomController:
         self.boost: bool = False
         self.cooler_boost: bool = False
         self.drying: bool = False
+        self._dry_limits: tuple[float, float] | None = None  # (threshold, hysteresis) last used
         self.room_target: float | None = None
         self.heater_setpoint: float | None = None
         self.room_status: str = "waiting"
@@ -613,6 +614,19 @@ class RoomController:
         dry_capable = any(self._supports(e, "dry") for e in self.coolers.entities)
         was_drying = self.drying
         if house is not None and can_dry and dry_capable and self.humidity is not None:
+            limits = (house.values["dry_humidity"], house.values["dry_hysteresis"])
+            if self.drying and limits != self._dry_limits and self.humidity <= limits[0]:
+                # New limits act at once: the hysteresis only keeps a drying run going
+                # that the current threshold would also have started.
+                _LOGGER.debug(
+                    "%s: drying limits changed to %s/%s, humidity %s is not above, stopping",
+                    self.entry.title,
+                    limits[0],
+                    limits[1],
+                    self.humidity,
+                )
+                self.drying = False
+            self._dry_limits = limits
             if not self.drying and self.humidity > house.values["dry_humidity"]:
                 self.drying = True
             elif self.drying and self.humidity <= (

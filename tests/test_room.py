@@ -1809,3 +1809,48 @@ async def test_raising_the_drying_threshold_stops_drying(hass, house, freezer) -
     assert _status(hass) == "off"
     await _settle(hass, freezer, seconds=61)
     assert _st(hass, AC)[0] == "off"
+
+
+async def test_raised_drying_threshold_applies_inside_the_hysteresis(hass, house, freezer) -> None:
+    """The 2026-11-12 case: drying at 71 % after the threshold went from 65 to 75 %."""
+    hass.states.async_set(SEASON, "Comfort")
+    hass.states.async_set(HUMIDITY, "71.4", {"device_class": "humidity"})
+    await _setup(hass, freezer)
+    assert _st(hass, AC)[0] == "dry"  # 71.4 % > 65 %
+    await _service(
+        hass,
+        freezer,
+        "number",
+        "set_value",
+        "number.house_drying_humidity_threshold",
+        value=75,
+    )
+    assert _st(hass, AC)[0] == "off"  # 71.4 % is not above 75 %, although above 75 - 5 %
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, AC)[0] == "off"
+
+    # The hysteresis itself is unchanged: above 75 % it dries, and it keeps going until 70 %.
+    await _set(hass, freezer, HUMIDITY, "76")
+    assert _st(hass, AC)[0] == "dry"
+    await _set(hass, freezer, HUMIDITY, "72")
+    assert _st(hass, AC)[0] == "dry"
+    await _set(hass, freezer, HUMIDITY, "70")
+    assert _st(hass, AC)[0] == "off"
+
+
+async def test_drying_continues_when_the_new_threshold_is_still_exceeded(
+    hass, house, freezer
+) -> None:
+    hass.states.async_set(SEASON, "Comfort")
+    hass.states.async_set(HUMIDITY, "80", {"device_class": "humidity"})
+    await _setup(hass, freezer)
+    assert _st(hass, AC)[0] == "dry"
+    await _service(
+        hass,
+        freezer,
+        "number",
+        "set_value",
+        "number.house_drying_humidity_threshold",
+        value=75,
+    )
+    assert _st(hass, AC)[0] == "dry"  # 80 % > 75 %

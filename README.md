@@ -128,7 +128,7 @@ It is set to the room's *Floor heating temperature* (27 °C). A setpoint changed
 
 ### Drying
 
-When a room's humidity is above the House's *Drying humidity threshold* and the room is neither heated nor cooled, its A/C runs in *dry* mode until humidity falls to threshold − *Drying hysteresis*. Frost protection does not stop drying; heating, pre-heat and cooling do. This applies whether or not the room is in use.
+When a room's humidity is above the House's *Drying humidity threshold* and the room is neither heated nor cooled, its A/C runs in *dry* mode until humidity falls to threshold − *Drying hysteresis*. A changed threshold applies at once: raise it above the current humidity and drying stops. Frost protection does not stop drying; heating, pre-heat and cooling do. This applies whether or not the room is in use.
 
 ### A/C commands
 
