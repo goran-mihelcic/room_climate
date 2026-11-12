@@ -98,7 +98,7 @@ Your prompt now starts with `(.venv)`.
 A good run ends with a line like:
 
 ```
-88 passed in 8.0s
+94 passed in 7.4s
 ```
 
 Run **format, lint and tests** before every commit.
@@ -127,7 +127,7 @@ Claude Code works the same way: start it from the Ubuntu terminal inside `~/src/
 | Room floor heating | off by default, on in a boost that uses it or while the room heats with its Floor heating switch on, floor heating temperature, retired 1.1.0 switch removed |
 | A/C commands | desired state kept, mode → temperature → fan auto, a slow temperature report waited for and not re-sent, a temperature not followed re-sent and reported once, slow A/C waited for without holding up the room and its late report not manual, mode not taken: retried after the response time, reported once (notify action or notify entity), recovered |
 | Drying | comfort season, frost protection, not while heating or cooling, hysteresis, humidity from devices |
-| Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual |
+| Manual changes | A/C remote set to 18 °C clamped to 22 °C, block policy, radiator turned off by hand, reset at next period, own commands not mistaken for manual; Manual control policy: a device changed, switched on or off by hand left alone until the schedule or situation changes or Resume automatic, other devices stay automatic, bathroom separately, heat pump and pump thermostat follow the device |
 | Override and restart | override expiry, Resume automatic button (manual target, device turned off, override), Automatic control off leaves every device as it is (rooms, floor thermostat, heat pump, hot water; hand changes not adopted), on follows the current situation, off survives a restart, values and override restored after a restart |
 | Robustness and logging | cloud integration (LG ThinQ) commands queued one at a time with the House pause, local ones not; a device integration raising an error doesn't stop the room (boost "both" with a crashing A/C), devices registered and linked, Season sensor shows its source, debug log file |
 

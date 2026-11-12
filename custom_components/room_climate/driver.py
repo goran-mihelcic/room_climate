@@ -45,6 +45,8 @@ class DeviceGroup:
     ac: bool = False  # A/C units get the verified mode / temperature / fan sequence
     manual_target: float | None = None
     manual_off: set[str] = field(default_factory=set)
+    # devices changed by hand under the Manual control policy: not driven until reset
+    manual_hold: set[str] = field(default_factory=set)
     period_key: tuple | None = None
     desired: dict[str, tuple[str, float | None]] = field(default_factory=dict)
     sent_at: dict[str, float] = field(default_factory=dict)
@@ -52,6 +54,7 @@ class DeviceGroup:
     def reset_manual(self) -> None:
         self.manual_target = None
         self.manual_off.clear()
+        self.manual_hold.clear()
 
 
 @dataclass
@@ -277,6 +280,10 @@ class ClimateDriver:
         if switched or sent:
             await self._async_fan(group, entity_id)
         return "settings"
+
+    def release(self, entity_id: str) -> None:
+        """Stop following up a command to this device (it is under manual control now)."""
+        self._clear_pending(entity_id)
 
     def _clear_pending(self, entity_id: str) -> None:
         self._pending.pop(entity_id, None)

@@ -41,7 +41,7 @@ Then go to **Settings → Devices & services → Add integration → Room Climat
 | Schedule | `schedule.living_room` | optional [schedule helper](https://www.home-assistant.io/integrations/schedule/); without one the room is always on schedule |
 | Room temperature sensor | `sensor.living_room_temperature` | optional; without it the radiators' own readings are used |
 | Room humidity sensor | `sensor.living_room_humidity` | optional; without it the radiators' (then the A/C's) own readings are used |
-| Manual changes | *Follow (within limits)* or *Block* | |
+| Manual changes | *Follow (within limits)*, *Block* or *Manual control* | |
 | Manual limits | heating 16–24 °C, cooling 22–28 °C | |
 | Room has a bathroom | | ticking it opens a second step |
 
@@ -184,6 +184,7 @@ The switch keeps its state across restarts.
 
 - **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
 - **Block:** the planned temperature is restored straight away, and a device switched off by hand is switched back on. Choose it per room under **Configure → Manual changes** to keep a room out of manual mode entirely.
+- **Manual control:** a device someone changes by hand (setpoint, or switched on or off with its own controls or remote) is left exactly as they set it: Room Climate sends it nothing until the next period change (room schedule on ↔ off; season, presence, *In use*, *Prepare house* or override changes) or until *Resume automatic* is pressed (a setting change on the room device also ends it). The room's other devices stay automatic. Bathroom devices follow the bathroom schedule instead of the room's, so the bathroom and the room go to manual control separately. Status shows **Manual control**, and the *Target temperature* sensor lists the devices in its `manual_control` attribute. A radiator or A/C switched on by hand counts for the pump thermostat and the heat pump with its own setpoint. In a Tado room the heads copy each other's setpoint, so both heads usually go to manual control together.
 - **Resume automatic** (button on the room device): drops manual targets in the room and its bathroom, switches devices turned off by hand back on, ends an override and the bathroom's *Heating on*. The room follows its schedule again at once.
 - **Wrong mode** (A/C switched to cool during heating, or turned on when it should be off) is always reverted.
 

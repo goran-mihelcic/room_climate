@@ -1698,3 +1698,82 @@ async def test_restore_after_restart(hass, house, freezer) -> None:
     await _setup(hass, freezer)
     assert hass.states.get("switch.living_room_override").state == "on"
     assert _st(hass, TRV_LR) == ("heat", 23.5)
+
+
+# ---- Manual control policy ----------------------------------------------------------
+
+
+async def test_manual_control_leaves_a_device_alone_until_the_schedule_changes(
+    hass, house, freezer
+) -> None:
+    await _setup(hass, freezer, manual_policy="manual")
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    await _set(hass, freezer, TRV_LR, temperature=25)  # someone turns the head up
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, TRV_LR) == ("heat", 25.0)  # left alone
+    assert _st(hass, TRV_DIN) == ("heat", 21.0)  # the other head stays automatic
+    assert hass.states.get("sensor.living_room_target_temperature").state == "21.0"
+    assert _status(hass) == "manual_control"
+    attrs = hass.states.get("sensor.living_room_target_temperature").attributes
+    assert attrs["manual_control"] == [TRV_LR]
+    assert _st(hass, THERMO) == ("heat", 25.0)  # the pump follows what was set by hand
+    await _set(hass, freezer, SCHEDULE, "off")  # next schedule change: automatic again
+    assert _st(hass, TRV_LR) == ("heat", 19.0)
+    assert _status(hass) == "eco"
+
+
+async def test_manual_control_device_turned_on_until_the_situation_changes(
+    hass, house, freezer
+) -> None:
+    await _setup(hass, freezer, manual_policy="manual")
+    assert _st(hass, AC)[0] == "off"
+    await _set(hass, freezer, AC, "heat", temperature=26)  # A/C switched on with its remote
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, AC) == ("heat", 26.0)
+    assert _status(hass) == "manual_control"
+    await _service(hass, freezer, "switch", "turn_off", "switch.living_room_in_use")
+    assert _st(hass, AC)[0] == "off"  # In use changed: back to automatic
+    assert _status(hass) == "frost_protection"
+
+
+async def test_manual_control_device_turned_off_by_hand(hass, house, freezer) -> None:
+    await _setup(hass, freezer, manual_policy="manual")
+    await _set(hass, freezer, TRV_DIN, "off")
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, TRV_DIN)[0] == "off"
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    await _service(hass, freezer, "button", "press", "button.living_room_resume_automatic")
+    assert _st(hass, TRV_DIN) == ("heat", 21.0)
+    assert _status(hass) == "comfort"
+
+
+async def test_manual_control_bathroom_separately(hass, house, freezer) -> None:
+    await _setup(hass, freezer, manual_policy="manual")
+    await _set(hass, freezer, BATH_TRV, temperature=26)
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, BATH_TRV) == ("heat", 26.0)
+    assert _status(hass, "sensor.living_room_bathroom_status") == "manual_control"
+    assert _status(hass) == "comfort"  # the room is not affected
+    await _set(hass, freezer, BATH_SCHEDULE, "on")  # bathroom schedule change
+    assert _st(hass, BATH_TRV) == ("heat", 24.0)
+    assert _status(hass, "sensor.living_room_bathroom_status") == "bath_period"
+
+
+async def test_manual_control_heat_pump_follows_a_radiator_on_by_hand(hass, house, freezer) -> None:
+    hass.states.async_set(OUTDOOR, "20", {"device_class": "temperature"})  # comfort weather
+    await _setup_computed(hass, freezer, manual_policy="manual")
+    assert _st(hass, TRV_LR)[0] == "off"
+    assert hass.states.get(HEAT_PUMP).state == "off"
+    await _set(hass, freezer, TRV_LR, "heat", temperature=22)
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, TRV_LR) == ("heat", 22.0)
+    assert hass.states.get(HEAT_PUMP).state == "on"
+    await _set(hass, freezer, TRV_LR, "off")  # still under manual control: switched off
+    assert hass.states.get(HEAT_PUMP).state == "off"
+
+
+async def test_follow_policy_still_reverts_a_device_turned_on(hass, house, freezer) -> None:
+    await _setup(hass, freezer)  # Follow
+    await _set(hass, freezer, AC, "heat", temperature=26)
+    await _settle(hass, freezer, seconds=61)
+    assert _st(hass, AC)[0] == "off"

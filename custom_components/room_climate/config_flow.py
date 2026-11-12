@@ -42,6 +42,7 @@ from .const import (
     DOMAIN,
     POLICY_BLOCK,
     POLICY_FOLLOW,
+    POLICY_MANUAL,
     SCHEDULE_DOMAINS,
     TYPE_HOUSE,
     TYPE_ROOM,
@@ -96,7 +97,7 @@ ROOM_SCHEMA = vol.Schema(
         vol.Optional(CONF_HUMIDITY_SENSOR): _entity("sensor", "humidity"),
         vol.Required(CONF_MANUAL_POLICY, default=POLICY_FOLLOW): sel.SelectSelector(
             sel.SelectSelectorConfig(
-                options=[POLICY_FOLLOW, POLICY_BLOCK],
+                options=[POLICY_FOLLOW, POLICY_BLOCK, POLICY_MANUAL],
                 translation_key="manual_policy",
                 mode=sel.SelectSelectorMode.LIST,
             )

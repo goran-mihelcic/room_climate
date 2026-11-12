@@ -49,7 +49,7 @@
           "schedule": "Optional schedule helper. On: comfort temperature and cooling. Off: eco temperature, A/C off. Without one the room is always on schedule.",
           "temperature_sensor": "Optional. Radiators reading higher than this sensor are corrected. Without it the radiators' own readings are used.",
           "humidity_sensor": "Optional. Without it the radiators' own readings are used.",
-          "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
+          "manual_policy": "What happens when someone changes temperature on a remote or thermostat, or turns a device on or off. Manual control: that device is left alone until the next schedule change, a change of season, presence, In use or Prepare house, or Resume automatic.",
           "manual_cool_min": "Example: 22 °C stops the A/C being set to 18 °C."
         }
       },
@@ -122,7 +122,7 @@
           "room_floor": "The room's own floor heating thermostat: on during a boost that uses floor heating, or while the room heats with its Floor heating switch on.",
           "floor_thermostat": "Set to the highest radiator setpoint of all rooms on the same thermostat.",
           "schedule": "On: comfort temperature and cooling. Off: eco temperature, A/C off.",
-          "manual_policy": "What happens when someone changes temperature on a remote or thermostat.",
+          "manual_policy": "What happens when someone changes temperature on a remote or thermostat, or turns a device on or off. Manual control: that device is left alone until the next schedule change, a change of season, presence, In use or Prepare house, or Resume automatic.",
           "manual_cool_min": "Example: 22 °C stops the A/C being set to 18 °C."
         }
       },
@@ -150,7 +150,8 @@
     "manual_policy": {
       "options": {
         "follow": "Follow (within limits) until the next period change",
-        "block": "Block: always restore the planned temperature"
+        "block": "Block: always restore the planned temperature",
+        "manual": "Manual control: leave a device changed by hand alone until the next schedule or situation change"
       }
     }
   },
@@ -175,6 +176,7 @@
           "eco": "Eco",
           "override": "Override",
           "manual": "Manual",
+          "manual_control": "Manual control",
           "boost": "Boost",
           "drying": "Drying",
           "paused": "Paused"
@@ -189,6 +191,7 @@
           "heating_on": "Heating on (timer)",
           "follow_room": "Following room",
           "manual": "Manual",
+          "manual_control": "Manual control",
           "paused": "Paused"
         }
       }

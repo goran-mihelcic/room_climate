@@ -60,6 +60,7 @@ BOOST_PARTS: Final = {
 
 POLICY_FOLLOW: Final = "follow"
 POLICY_BLOCK: Final = "block"
+POLICY_MANUAL: Final = "manual"  # leave a device changed by hand alone until the period ends
 
 DEFAULT_HEAT_MIN: Final = 16.0
 DEFAULT_HEAT_MAX: Final = 24.0
@@ -111,6 +112,7 @@ ROOM_STATUSES: Final = [
     "eco",
     "override",
     "manual",
+    "manual_control",
     "boost",
     "drying",
     "paused",
@@ -123,6 +125,7 @@ BATH_STATUSES: Final = [
     "heating_on",
     "follow_room",
     "manual",
+    "manual_control",
     "paused",
 ]
 

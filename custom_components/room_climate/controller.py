@@ -59,6 +59,7 @@ from .const import (
     FLOOR_NUMBERS,
     ON_STATES,
     POLICY_FOLLOW,
+    POLICY_MANUAL,
     REGIME_COOL,
     REGIME_FROST,
     REGIME_HEAT,
@@ -313,6 +314,47 @@ class RoomController:
         self.request_update()
 
     @callback
+    def _check_manual_control(
+        self,
+        group: DeviceGroup,
+        entity_id: str,
+        new_state,
+        want_mode: str,
+        want_temp: float | None,
+    ) -> None:
+        """Manual control policy: a device changed by hand is left alone until the period
+        (schedule, season, presence, In use, Prepare house, override) changes."""
+        if entity_id in group.manual_hold:
+            return
+        temp = to_float(new_state.attributes.get("temperature"))
+        mode_changed = new_state.state != want_mode
+        temp_changed = (
+            want_mode != "off"
+            and want_temp is not None
+            and temp is not None
+            and abs(temp - want_temp) >= 0.05
+        )
+        if not (mode_changed or temp_changed):
+            return
+        if not mode_changed and any(
+            abs(temp - other) < 0.05
+            for other_id, (_mode, other) in group.desired.items()
+            if other_id != entity_id and other is not None
+        ):
+            # A device copying another device's planned setpoint (Tado room sync), not a person.
+            return
+        _LOGGER.info(
+            "%s: %s changed by hand to %s%s: left alone until the next schedule or situation "
+            "change",
+            self.entry.title,
+            entity_id,
+            new_state.state,
+            "" if temp is None or new_state.state == "off" else f" {temp:g} °C",
+        )
+        group.manual_hold.add(entity_id)
+        self.driver.release(entity_id)
+
+    @callback
     def _check_manual_change(self, group: DeviceGroup, entity_id: str, new_state) -> None:
         if new_state is None or new_state.state in (STATE_UNAVAILABLE, STATE_UNKNOWN):
             return
@@ -330,6 +372,9 @@ class RoomController:
 
         want_mode, want_temp = want
         mode = new_state.state
+        if self.policy == POLICY_MANUAL:
+            self._check_manual_control(group, entity_id, new_state, want_mode, want_temp)
+            return
         follow = self.policy == POLICY_FOLLOW
 
         if want_mode == "off":
@@ -580,6 +625,8 @@ class RoomController:
             self.coolers.reset_manual()  # an A/C switched off by hand is reconsidered
         if self.drying and status == "off":
             status = "drying"
+        if status != "waiting" and self._held(self.heaters, self.coolers, self.room_floor):
+            status = "manual_control"
         self.room_status = status
 
         # ---- bathroom ---------------------------------------------------
@@ -605,6 +652,13 @@ class RoomController:
                 self.bath_target, self.bath_status = self.bath_heaters.manual_target, "manual"
         else:
             self.bath_target, self.bath_status = None, "off"
+        if self.bath_status != "waiting" and self._held(self.bath_heaters, self.floor):
+            self.bath_status = "manual_control"
+
+    @staticmethod
+    def _held(*groups: DeviceGroup) -> list[str]:
+        """Devices under manual control (changed by hand, Manual control policy)."""
+        return sorted(e for group in groups for e in group.manual_hold)
 
     def _bath_on(self) -> bool:
         """The bathroom's "Heating on" switch is on (never in the cooling season)."""
@@ -713,6 +767,12 @@ class RoomController:
                 )
             else:
                 put(self.floor, "off", None)
+
+        # Devices under manual control are not driven; they enter the plan as they are, so
+        # the floor thermostat and the heat pump follow what people set on them.
+        for entity_id, (group, _mode, _temp) in list(plan.items()):
+            if entity_id in group.manual_hold and (st := self.hass.states.get(entity_id)):
+                plan[entity_id] = (group, st.state, to_float(st.attributes.get("temperature")))
         return plan
 
     def _pump_demand(
@@ -752,6 +812,8 @@ class RoomController:
         self._log_decision(plan)
         try:
             for entity_id, (group, mode, temp) in plan.items():
+                if entity_id in group.manual_hold:
+                    continue  # changed by hand: left alone until the period changes
                 # An A/C heating as part of a boost runs its fan at full speed.
                 boosting = group is self.coolers and mode == "heat" and self.cooler_boost
                 fan = "high" if boosting else "auto"
@@ -817,6 +879,7 @@ class RoomController:
             "manually_off": sorted(
                 self.heaters.manual_off | self.coolers.manual_off | self.room_floor.manual_off
             ),
+            "manual_control": self._held(self.heaters, self.coolers, self.room_floor),
             "override": self.values["override"],
             "override_until": self.values["override_until"],
         }
@@ -830,4 +893,5 @@ class RoomController:
             "heating_on_until": self.values.get("bath_on_until"),
             "manual_target": self.bath_heaters.manual_target,
             "manually_off": sorted(self.bath_heaters.manual_off | self.floor.manual_off),
+            "manual_control": self._held(self.bath_heaters, self.floor),
         }
