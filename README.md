@@ -150,7 +150,7 @@ Like the A/Cs, each command is sent once and given the **Heat pump response time
 
 ### Hot water
 
-The House's hot water (an LG `water_heater`) is **on** at the *Hot water temperature* (House device, default 45 °C) while someone is home or *Prepare house* is on, so the water is warm on arrival, and **off** while nobody is home, all year round. It is switched on first and given the temperature once it reports on, and checked like the heat pump: same *Heat pump response time*, re-sent, one notification after two misses, changes by hand undone.
+The House's hot water (a `water_heater`, a `climate` entity such as a template over the heat pump's hot water switch and target, which gets `hvac_mode` heat/off, or a switch) is **on** at the *Hot water temperature* (House device, default 45 °C) while someone is home or *Prepare house* is on, so the water is warm on arrival, and **off** while nobody is home, all year round. It is switched on first and given the temperature once it reports on, and checked like the heat pump: same *Heat pump response time*, re-sent, one notification after two misses, changes by hand undone.
 
 ### Cloud command queue
 

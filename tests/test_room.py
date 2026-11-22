@@ -1334,6 +1334,20 @@ async def test_hot_water_on_while_home_or_preparing(hass, house, freezer) -> Non
     assert hass.states.get(HOT_WATER).state == "heat_pump"
 
 
+async def test_climate_hot_water_set_to_heat_and_off(hass, house, freezer) -> None:
+    """A climate hot water device (e.g. a template over the heat pump) gets heat/off."""
+    _climate(hass, "climate.hot_water", "off", 40, modes=("off", "heat"))
+    await _add(hass, "House", "house", {**HOUSE_FORM, "hot_water_entity": "climate.hot_water"})
+    await _setup(hass, freezer, with_house=False)
+    st = hass.states.get("climate.hot_water")
+    assert (st.state, st.attributes["temperature"]) == ("heat", 45.0)
+
+    await _set(hass, freezer, AT_HOME, "off")  # nobody home: off
+    assert hass.states.get("climate.hot_water").state == "off"
+    calls = [n for n, d in house.calls if d.get("entity_id") == "climate.hot_water"]
+    assert calls == ["set_hvac_mode", "set_temperature", "set_hvac_mode"]
+
+
 async def test_cloud_commands_are_queued_with_a_pause(hass, house, freezer, monkeypatch) -> None:
     """LG ThinQ (a cloud integration) gets one command at a time with a pause between."""
     pauses = []
