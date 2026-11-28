@@ -72,6 +72,11 @@ def _async_remove_retired_entities(hass: HomeAssistant, entry: RoomClimateConfig
     # 1.1.0 "Boost with floor heating" switch: replaced by the Boost method select in 1.2.0
     if entity_id := entities.async_get_entity_id("switch", DOMAIN, f"{entry.entry_id}_boost_floor"):
         entities.async_remove(entity_id)
+    # 1.4.0: radiators follow the room difference; the boost no longer raises them
+    if entity_id := entities.async_get_entity_id(
+        "number", DOMAIN, f"{entry.entry_id}_boost_offset"
+    ):
+        entities.async_remove(entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: RoomClimateConfigEntry) -> bool:

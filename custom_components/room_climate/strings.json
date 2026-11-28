@@ -200,13 +200,10 @@
       "boost_method": {
         "name": "Boost method",
         "state": {
-          "heaters": "Raise radiator setpoints",
+          "none": "None (radiators only)",
           "coolers": "A/C in heat mode",
-          "both": "Radiators and A/C",
           "floor": "Floor heating",
-          "heaters_floor": "Radiators and floor heating",
-          "coolers_floor": "A/C and floor heating",
-          "all": "Radiators, A/C and floor heating"
+          "coolers_floor": "A/C and floor heating"
         }
       }
     }

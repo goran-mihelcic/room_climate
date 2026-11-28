@@ -20,7 +20,7 @@ from pytest_homeassistant_custom_component.common import (
     mock_restore_cache_with_extra_data,
 )
 
-from custom_components.room_climate import command_queue
+from custom_components.room_climate import command_queue, const
 from custom_components.room_climate import controller as ctl_mod
 from custom_components.room_climate.const import DOMAIN
 
@@ -100,11 +100,16 @@ def _climate(hass, entity_id, mode, temp, modes=("off", "heat"), **extra):
 
 
 @pytest.fixture
-async def house(hass: HomeAssistant, freezer):
+async def house(hass: HomeAssistant, freezer, request, monkeypatch):
     """Fake devices that obey climate service calls, plus house entities."""
     await hass.config.async_set_time_zone("Europe/Zagreb")
     freezer.move_to("2026-11-03 10:00:00+01:00")
     ctl_mod.COMMAND_GRACE_SECONDS = 0
+    if request.node.get_closest_marker("radiator_push") is None:
+        # Radiators get the plain target (+ correction), as with multiplier 0, so tests of
+        # schedules, manual changes etc. are not about the push; its own tests are marked.
+        spec = const.HOUSE_NUMBERS["radiator_gain"]
+        monkeypatch.setitem(const.HOUSE_NUMBERS, "radiator_gain", (*spec[:4], 0.0, spec[5]))
 
     for e in (THERMO, TRV_LR, TRV_DIN, TRV_BED, BATH_TRV, FLOOR, ROOM_FLOOR):
         _climate(hass, e, "off", 15)
@@ -630,15 +635,30 @@ async def test_manual_change_on_corrected_radiator(hass, house, freezer) -> None
     assert _status(hass) == "manual"
 
 
-async def test_manual_change_on_boosted_radiator(hass, house, freezer) -> None:
-    hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
+@pytest.mark.radiator_push
+async def test_manual_change_on_pushed_radiator(hass, house, freezer) -> None:
+    await _setup(hass, freezer)  # room 20.5, target 21: 21 + 2 × 0.5 = 22
+    assert _st(hass, TRV_LR) == ("heat", 22.0)
+    # turned up by 1 °C: the room target goes up by 1 °C, and the push follows the new
+    # difference: 22 + 2 × 1.5 = 25
+    await _set(hass, freezer, TRV_LR, temperature=23)
+    assert hass.states.get("sensor.living_room_target_temperature").state == "22.0"
+    assert _st(hass, TRV_DIN) == ("heat", 25.0)
+    assert _st(hass, TRV_LR) == ("heat", 25.0)
+    assert _status(hass) == "manual"
+
+
+@pytest.mark.radiator_push
+async def test_manual_change_on_capped_radiator(hass, house, freezer) -> None:
+    """The cap hides part of the push: the change is taken from what was sent."""
+    hass.states.async_set(TEMP, "17.0", {"device_class": "temperature"})
     await _setup(hass, freezer)
-    assert _st(hass, TRV_LR) == ("heat", 24.0)  # 21 + boost offset 3
-    # turned up by 2 °C during boost: the room target goes up by 2 °C, boost goes on
-    await _set(hass, freezer, TRV_LR, temperature=26)
-    assert hass.states.get("sensor.living_room_target_temperature").state == "23.0"
-    assert _st(hass, TRV_DIN) == ("heat", 26.0)
-    assert _status(hass) == "boost"
+    await _number(hass, freezer, RADIATOR_MAX, 25)
+    assert _attr(hass, "heater_setpoint") == 29.0  # 21 + 2 × 4
+    assert _st(hass, TRV_LR) == ("heat", 25.0)
+    await _set(hass, freezer, TRV_LR, temperature=24)  # turned down by 1 °C
+    assert hass.states.get("sensor.living_room_target_temperature").state == "20.0"
+    assert _status(hass) == "manual"
 
 
 async def test_no_correction_without_room_sensor(hass, house, freezer) -> None:
@@ -653,36 +673,116 @@ async def test_no_correction_without_room_sensor(hass, house, freezer) -> None:
 # ---- boost -------------------------------------------------------------------
 
 
-async def test_boost_raises_radiators(hass, house, freezer) -> None:
-    hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
+RADIATOR_GAIN = "number.house_radiator_multiplier"
+RADIATOR_MAX = "number.house_max_radiator_temperature"
+RADIATOR_BAND = "number.house_radiator_dead_band"
+
+
+async def _number(hass, freezer, entity_id, value) -> None:
+    await _service(hass, freezer, "number", "set_value", entity_id, value=value)
+
+
+@pytest.mark.radiator_push
+async def test_radiators_follow_the_room_difference(hass, house, freezer) -> None:
+    """target ± 2 × |target − room|, the push rounded up to 0.5 °C (the 1.4 strategy)."""
+    hass.states.async_set(TEMP, "22.7", {"device_class": "temperature"})
     await _setup(hass, freezer)
+    assert hass.states.get(RADIATOR_GAIN).state == "2.0"
+    assert hass.states.get(RADIATOR_MAX).state == "30.0"
+    assert hass.states.get(RADIATOR_BAND).state == "0.2"
+    await _number(hass, freezer, "number.living_room_comfort_temperature", 23)
+    for room, setpoint in (
+        ("22.7", 24.0),  # 0.3 × 2 = 0.6 -> 1.0
+        ("23.7", 21.5),  # 0.7 × 2 = 1.4 -> 1.5, below the target in a warm room
+        ("22.75", 23.5),  # 0.25 × 2 = 0.5 exactly: stays 0.5
+        ("22.85", 23.0),  # 0.15: inside the dead band (0.2), on target
+        ("23.15", 23.0),  # the same above the target
+        ("22.8", 23.5),  # 0.2: the dead band edge counts, 0.4 -> 0.5
+        ("23.0", 23.0),
+        ("17.0", 30.0),  # 23 + 12, capped at the max radiator temperature
+    ):
+        await _set(hass, freezer, TEMP, room)
+        assert _st(hass, TRV_LR) == ("heat", setpoint), room
+        assert _st(hass, TRV_DIN) == ("heat", setpoint), room
+    assert _st(hass, THERMO) == ("heat", 30.0)  # the floor thermostat follows the radiators
+    assert _attr(hass, "heater_setpoint") == 35.0  # before the cap
+
+    await _number(hass, freezer, RADIATOR_MAX, 26)
+    assert _st(hass, TRV_LR) == ("heat", 26.0)
+    await _set(hass, freezer, TEMP, "22.7")
+    await _number(hass, freezer, RADIATOR_GAIN, 1)  # 0.3 -> 0.5
+    assert _st(hass, TRV_LR) == ("heat", 23.5)
+    await _number(hass, freezer, RADIATOR_GAIN, 0)  # 0: the plain target
+    assert _st(hass, TRV_LR) == ("heat", 23.0)
+    await _number(hass, freezer, RADIATOR_GAIN, 2)
+    await _number(hass, freezer, RADIATOR_BAND, 0.5)  # 0.3 is now inside the dead band
+    assert _st(hass, TRV_LR) == ("heat", 23.0)
+
+
+@pytest.mark.radiator_push
+async def test_radiator_push_with_correction_is_capped(hass, house, freezer) -> None:
+    """The correction comes on top of the push; the maximum caps the final setpoint."""
+    hass.states.async_set(TEMP, "20.5", {"device_class": "temperature"})
+    _climate(hass, TRV_LR, "off", 15, current_temperature=22.5)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=22.5)
+    await _setup(hass, freezer)
+    # 21 + 2 × 0.5 = 22, + correction 2 = 24
+    assert _attr(hass, "radiator_corrections") == {TRV_LR: 2.0, TRV_DIN: 2.0}
     assert _st(hass, TRV_LR) == ("heat", 24.0)
-    assert _st(hass, THERMO) == ("heat", 24.0)
-    assert _status(hass) == "boost"
-    # still boosting at 20.0 (hysteresis), ends within the exit margin (0.3)
-    await _set(hass, freezer, TEMP, "20.0")
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
-    await _set(hass, freezer, TEMP, "20.8")
+    await _number(hass, freezer, RADIATOR_MAX, 23)
+    assert _st(hass, TRV_LR) == ("heat", 23.0)
+    assert _st(hass, TRV_DIN) == ("heat", 23.0)
+
+
+@pytest.mark.radiator_push
+async def test_radiator_push_in_frost_protection(hass, house, freezer) -> None:
+    _climate(hass, TRV_LR, "off", 15, current_temperature=11)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=11)
+    await _setup(hass, freezer)
+    await _service(hass, freezer, "switch", "turn_off", "switch.living_room_in_use")
+    # frost 12 in a room at 20.5: 12 − 17 -> the radiator's minimum (5)
+    assert _st(hass, TRV_LR) == ("heat", 5.0)
+    await _set(hass, freezer, TEMP, "11.0")  # 12 + 2 × 1 = 14
+    assert _st(hass, TRV_LR) == ("heat", 14.0)
+
+
+@pytest.mark.radiator_push
+async def test_no_radiator_push_without_room_sensor(hass, house, freezer) -> None:
+    _climate(hass, TRV_LR, "off", 15, current_temperature=19)
+    _climate(hass, TRV_DIN, "off", 15, current_temperature=19)
+    await _setup(hass, freezer, temperature_sensor=None)  # room = the radiators' 19 °C
     assert _st(hass, TRV_LR) == ("heat", 21.0)
+
+
+async def test_no_boost_with_method_none(hass, house, freezer) -> None:
+    hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
+    await _setup(hass, freezer)
+    assert hass.states.get(BOOST_SELECT).state == "none"  # the default
+    assert _status(hass) == "comfort"  # nothing to add: the radiators push on their own
+    assert _attr(hass, "boost") is False
+    assert _st(hass, AC)[0] == "off"
+    assert _st(hass, FLOOR)[0] == "off"
 
 
 async def test_boost_exit_margin_is_configurable(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
-    await _setup(hass, freezer)
-    await _service(
-        hass, freezer, "number", "set_value", "number.living_room_boost_exit_margin", value=1.0
-    )
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
-    await _set(hass, freezer, TEMP, "20.0")
-    assert _st(hass, TRV_LR) == ("heat", 21.0)
+    await _setup(hass, freezer, has_bathroom=False)
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="coolers")
+    await _number(hass, freezer, "number.living_room_boost_exit_margin", 1.0)
+    assert _st(hass, AC)[0] == "heat"
+    await _set(hass, freezer, TEMP, "19.5")  # 1.5 from the target: still boosting
+    assert _st(hass, AC)[0] == "heat"
+    await _set(hass, freezer, TEMP, "20.0")  # within 1.0: ends
+    assert _st(hass, AC)[0] == "off"
 
 
 async def test_boost_with_ac(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
     await _setup(hass, freezer, has_bathroom=False)
     sel = "select.living_room_boost_method"
-    assert hass.states.get(sel).state == "heaters"
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    assert hass.states.get(sel).state == "none"
+    assert hass.states.get(sel).attributes["options"] == ["none", "coolers"]
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
     await _service(hass, freezer, "select", "select_option", sel, option="coolers")
     for e in (TRV_LR, TRV_DIN):
         assert _st(hass, e) == ("heat", 21.0)
@@ -711,20 +811,18 @@ async def test_boost_with_bathroom_floor_heating(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
     await _setup(hass, freezer)
     assert hass.states.get(BOOST_SELECT).attributes["options"] == [
-        "heaters",
+        "none",
         "coolers",
         "floor",
-        "both",
-        "heaters_floor",
         "coolers_floor",
-        "all",
     ]
     assert hass.states.get(FLOOR_SWITCH) is None  # no floor heating in the room itself
+    assert _status(hass) == "comfort"  # method none: no boost
+    assert _st(hass, FLOOR)[0] == "off"
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="floor")
     assert _status(hass) == "boost"
-    assert _st(hass, FLOOR)[0] == "off"  # not part of the boost by default
-    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="heaters_floor")
     assert _st(hass, FLOOR) == ("heat", 27.0)
-    assert _st(hass, TRV_LR) == ("heat", 24.0)  # radiators raised as well
+    assert _st(hass, TRV_LR) == ("heat", 21.0)  # radiators are no part of a boost
     await _set(hass, freezer, TEMP, "20.8")  # boost ends: floor heating off again
     assert _status(hass) == "comfort"
     assert _st(hass, FLOOR)[0] == "off"
@@ -733,11 +831,12 @@ async def test_boost_with_bathroom_floor_heating(hass, house, freezer) -> None:
 async def test_room_floor_heating_in_a_boost(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "18.0", {"device_class": "temperature"})
     await _setup(hass, freezer, room_floor=ROOM_FLOOR)
-    assert _status(hass) == "boost"
-    assert _st(hass, ROOM_FLOOR)[0] == "off"  # default method: radiators only
+    assert _status(hass) == "comfort"
+    assert _st(hass, ROOM_FLOOR)[0] == "off"  # default method: none
     await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="floor")
+    assert _status(hass) == "boost"
     assert _st(hass, ROOM_FLOOR) == ("heat", 27.0)
-    assert _st(hass, TRV_LR) == ("heat", 21.0)  # not raised: the method is floor only
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
     assert _st(hass, AC)[0] == "off"
     assert _st(hass, FLOOR)[0] == "off"  # the bathroom floor is not used for the room
     assert hass.states.get("sensor.living_room_target_temperature").attributes["floor_heating"]
@@ -774,11 +873,7 @@ async def test_room_floor_heating_switch(hass, house, freezer) -> None:
 
 async def test_boost_select_with_floor_heating_but_no_ac(hass, house, freezer) -> None:
     await _setup(hass, freezer, coolers=[], has_bathroom=False, room_floor=ROOM_FLOOR)
-    assert hass.states.get(BOOST_SELECT).attributes["options"] == [
-        "heaters",
-        "floor",
-        "heaters_floor",
-    ]
+    assert hass.states.get(BOOST_SELECT).attributes["options"] == ["none", "floor"]
 
 
 async def test_retired_boost_floor_switch_is_removed(hass, house, freezer) -> None:
@@ -792,9 +887,15 @@ async def test_retired_boost_floor_switch_is_removed(hass, house, freezer) -> No
     registry.async_get_or_create(
         "switch", DOMAIN, f"{entry.entry_id}_boost_floor", config_entry=entry
     )
+    # 1.4.0: radiators are no boost method, so the boost offset is gone too
+    registry.async_get_or_create(
+        "number", DOMAIN, f"{entry.entry_id}_boost_offset", config_entry=entry
+    )
     assert await hass.config_entries.async_setup(entry.entry_id)
     await _settle(hass, freezer)
     assert registry.async_get_entity_id("switch", DOMAIN, f"{entry.entry_id}_boost_floor") is None
+    assert registry.async_get_entity_id("number", DOMAIN, f"{entry.entry_id}_boost_offset") is None
+    assert hass.states.get("number.living_room_comfort_temperature") is not None
 
 
 BATH_ON = "switch.living_room_bathroom_heating_on"
@@ -852,27 +953,37 @@ async def test_resume_automatic_ends_bathroom_heating_on(hass, house, freezer) -
     assert _st(hass, FLOOR)[0] == "off"
 
 
-async def test_boost_both(hass, house, freezer) -> None:
+@pytest.mark.parametrize(
+    ("stored", "method", "ac", "floor"),
+    [
+        ("heaters", "none", "off", "off"),
+        ("both", "coolers", "heat", "off"),
+        ("heaters_floor", "floor", "off", "heat"),
+        ("all", "coolers_floor", "heat", "heat"),
+    ],
+)
+async def test_boost_method_from_before_1_4_is_mapped(
+    hass, house, freezer, stored, method, ac, floor
+) -> None:
+    """Radiators are no boost method any more: a stored choice keeps its other parts."""
+    mock_restore_cache_with_extra_data(hass, [(State(BOOST_SELECT, stored), {})])
     hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
-    await _setup(hass, freezer, has_bathroom=False)
-    await _service(
-        hass, freezer, "select", "select_option", "select.living_room_boost_method", option="both"
-    )
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
-    assert _st(hass, AC) == ("heat", 21.0)
+    await _setup(hass, freezer)
+    assert hass.states.get(BOOST_SELECT).state == method
+    assert _st(hass, AC)[0] == ac
+    assert _st(hass, FLOOR)[0] == floor
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
 
 
-async def test_boost_both_when_ac_integration_crashes(hass, house, freezer, caplog) -> None:
-    """LG ThinQ raises TypeError on set_temperature: radiators still boost, boost still ends."""
+async def test_boost_when_ac_integration_crashes(hass, house, freezer, caplog) -> None:
+    """LG ThinQ raises TypeError on set_temperature: the room goes on, boost still ends."""
     hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
     house.broken.add(AC)
     await _setup(hass, freezer, has_bathroom=False)
-    await _service(
-        hass, freezer, "select", "select_option", "select.living_room_boost_method", option="both"
-    )
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="coolers")
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
     assert _st(hass, AC) == ("heat", 24)  # mode set, its own setpoint kept: set_temperature failed
-    assert _st(hass, THERMO) == ("heat", 24.0)
+    assert _st(hass, THERMO) == ("heat", 21.0)
     assert _status(hass) == "boost"
     await _settle(hass, freezer, seconds=61)  # retried, but the traceback is logged once
     assert caplog.text.count("set_temperature raised an error in climate.living_room_air") == 1
@@ -891,9 +1002,13 @@ async def test_no_boost_select_without_ac(hass, house, freezer) -> None:
 
 async def test_manual_raise_far_above_room_triggers_boost(hass, house, freezer) -> None:
     await _setup(hass, freezer)
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="coolers")
+    assert _status(hass) == "comfort"  # 0.5 below the target
     await _set(hass, freezer, TRV_LR, temperature=23)
     assert hass.states.get("sensor.living_room_target_temperature").state == "23.0"
-    assert _st(hass, TRV_DIN) == ("heat", 26.0)
+    assert _st(hass, TRV_DIN) == ("heat", 23.0)
+    assert _st(hass, AC) == ("heat", 23.0)  # 2.5 below the new target: boost with the A/C
+    assert _status(hass) == "boost"
 
 
 # ---- frost protection season and pre-heat ------------------------------------
@@ -1449,11 +1564,9 @@ async def test_slow_ac_does_not_hold_up_the_room(hass, house, freezer) -> None:
     hass.states.async_set(TEMP, "16.2", {"device_class": "temperature"})
     house.stuck.add(AC)  # it switches, but reports that only later
     await _setup(hass, freezer, has_bathroom=False)
-    await _service(
-        hass, freezer, "select", "select_option", "select.living_room_boost_method", option="both"
-    )
-    # radiators boosted at once; the A/C got its mode command and is given time
-    assert _st(hass, TRV_LR) == ("heat", 24.0)
+    await _service(hass, freezer, "select", "select_option", BOOST_SELECT, option="coolers")
+    # radiators set at once; the A/C got its mode command and is given time
+    assert _st(hass, TRV_LR) == ("heat", 21.0)
     assert _ac_calls(house) == ["set_hvac_mode"]
 
     # 40 s later the A/C reports heat, still with its old setpoint: not a manual change

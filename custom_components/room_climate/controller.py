@@ -29,7 +29,7 @@ from homeassistant.helpers.start import async_at_started
 from .const import (
     AC_NUMBERS,
     BATH_NUMBERS,
-    BOOST_HEATERS,
+    BOOST_NONE,
     BOOST_PARTS,
     COMMAND_GRACE_SECONDS,
     CONF_BATH_FLOOR,
@@ -57,9 +57,11 @@ from .const import (
     DEFAULT_HEAT_MIN,
     DOMAIN,
     FLOOR_NUMBERS,
+    LEGACY_BOOST_METHODS,
     ON_STATES,
     POLICY_FOLLOW,
     POLICY_MANUAL,
+    RADIATOR_STEP,
     REGIME_COOL,
     REGIME_FROST,
     REGIME_HEAT,
@@ -121,7 +123,7 @@ class RoomController:
         # Values owned by this integration's own entities (restored on start).
         self.values: dict[str, Any] = {k: v[4] for k, v in ROOM_NUMBERS.items()}
         self.values.update({"in_use": True, "override": False, "override_until": None})
-        self.values["boost_method"] = BOOST_HEATERS
+        self.values["boost_method"] = BOOST_NONE
         if self.room_floor.entities:
             self.values.update({k: v[4] for k, v in FLOOR_NUMBERS.items()})
             self.values["floor_heating"] = False  # Floor heating switch: heat with the room
@@ -186,8 +188,6 @@ class RoomController:
     def boost_methods(self) -> list[str]:
         """The boost methods this room's devices allow, in the order the select shows them."""
         have = set()
-        if self.heaters.entities:
-            have.add("heaters")
         if self.coolers.entities:
             have.add("coolers")
         if self.room_floor.entities or self.floor.entities:
@@ -197,7 +197,7 @@ class RoomController:
     @property
     def boost_method(self) -> str:
         """The chosen method, reduced to the devices the room has (e.g. after Configure)."""
-        method = self.values["boost_method"]
+        method = LEGACY_BOOST_METHODS.get(self.values["boost_method"], self.values["boost_method"])
         available = self.boost_methods
         if method in available:
             return method
@@ -207,7 +207,7 @@ class RoomController:
         for candidate in available:
             if BOOST_PARTS[candidate] == parts:
                 return candidate
-        return available[0] if available else BOOST_HEATERS
+        return BOOST_NONE
 
     @property
     def boost_parts(self) -> frozenset[str]:
@@ -426,11 +426,13 @@ class RoomController:
             return
         adopted = temp
         if group is self.heaters:
-            # A radiator shows target + correction (+ boost offset while boosting);
-            # the person meant the room target, so turning it up 1 °C raises that by 1 °C.
-            adopted -= self.corrections.get(entity_id, 0.0)
-            if self.heater_setpoint is not None and self.room_target is not None:
-                adopted -= self.heater_setpoint - self.room_target
+            # A radiator shows target + push (multiplier × room difference) + correction,
+            # capped; the person meant the room target, so turning it up 1 °C from what we
+            # sent raises that by 1 °C (also when the cap hid part of the push).
+            if self.room_target is not None:
+                adopted = self.room_target + (temp - want_temp)
+            else:
+                adopted -= self.corrections.get(entity_id, 0.0)
         kind = KIND_HEAT if want_mode == "heat" and group.kind != KIND_FLOOR else group.kind
         low, high = self.limits.get(kind, (None, None))
         if low is not None:
@@ -591,8 +593,13 @@ class RoomController:
                 target, status = active.manual_target, "manual"
         self.room_target = target
 
-        # ---- boost (heating only, with hysteresis) ----------------------
-        if self.regime == REGIME_HEAT and target is not None and self.room_temperature is not None:
+        # ---- boost (heating only, with hysteresis; extra devices only) ------
+        if (
+            self.regime == REGIME_HEAT
+            and target is not None
+            and self.room_temperature is not None
+            and BOOST_PARTS.get(self.boost_method)
+        ):
             delta = target - self.room_temperature
             if not self.boost and delta > v["boost_delta"]:
                 self.boost = True
@@ -600,11 +607,8 @@ class RoomController:
                 self.boost = False
         else:
             self.boost = False
-        raise_heaters = "heaters" in self.boost_parts
         self.cooler_boost = "coolers" in self.boost_parts
-        self.heater_setpoint = (
-            target + v["boost_offset"] if (raise_heaters and target is not None) else target
-        )
+        self.heater_setpoint = self._radiator_setpoint(target, house)
         if self.boost:
             status = "boost"
 
@@ -669,6 +673,28 @@ class RoomController:
         if self.bath_status != "waiting" and self._held(self.bath_heaters, self.floor):
             self.bath_status = "manual_control"
 
+    def _radiator_setpoint(self, target: float | None, house: HouseController | None):
+        """The room target pushed by the House multiplier times the room's difference.
+
+        Below the target the radiators get more, above it less: target ± multiplier ×
+        |target − room|, the push rounded up to whole RADIATOR_STEPs. A difference under
+        the dead band counts as none, so a room hovering at its target doesn't flip its
+        radiators (battery TRVs) a step up and down. Only with a room temperature sensor:
+        the radiators' own readings are what the correction is for. The correction and the
+        House maximum are applied per radiator in _plan.
+        """
+        room = self.room_temperature
+        if target is None or house is None or room is None:
+            return target
+        if not self.entry.options.get(CONF_TEMP_SENSOR):
+            return target
+        gain = float(house.values["radiator_gain"])
+        delta = target - room
+        if gain <= 0 or abs(delta) < float(house.values["radiator_deadband"]) - 1e-6:
+            return target
+        push = math.ceil(round(abs(delta) * gain, 3) / RADIATOR_STEP - 1e-6) * RADIATOR_STEP
+        return target + push if delta > 0 else target - push
+
     @staticmethod
     def _held(*groups: DeviceGroup) -> list[str]:
         """Devices under manual control (changed by hand, Manual control policy)."""
@@ -706,15 +732,17 @@ class RoomController:
         plan: dict[str, tuple[DeviceGroup, str, float | None]] = {}
         # Radiators of a room get exactly the same setpoint (see _update_corrections), so
         # they are capped at the lowest maximum among them rather than each at its own.
-        radiator_max = min(
-            (
-                high
-                for e in self.heaters.entities
-                if (st := self.hass.states.get(e))
-                and (high := to_float(st.attributes.get("max_temp"))) is not None
-            ),
-            default=None,
-        )
+        # The House's Max radiator temperature caps the final setpoint, correction included.
+        house = self._house()
+        caps = [
+            high
+            for e in self.heaters.entities
+            if (st := self.hass.states.get(e))
+            and (high := to_float(st.attributes.get("max_temp"))) is not None
+        ]
+        if house is not None:
+            caps.append(float(house.values["radiator_max"]))
+        radiator_max = min(caps, default=None)
 
         def put(group: DeviceGroup, mode: str, temp: float | None, corrected: bool = False):
             for entity_id in group.entities:
@@ -750,7 +778,7 @@ class RoomController:
             put(self.heaters, "off", None)
             put(self.coolers, "cool", self.room_target)
         elif self.regime in (REGIME_FROST, REGIME_PREHEAT):
-            put(self.heaters, "heat", self.room_target, corrected=True)
+            put(self.heaters, "heat", self.heater_setpoint, corrected=True)
             coolers_idle()
         else:
             put(self.heaters, "off", None)
@@ -858,6 +886,7 @@ class RoomController:
             dry = f"(dry above {on:g}, until {on - hyst:g}) "
         decision = (
             f"{self.room_status} ({self.regime}, {self.reason}) target={self.room_target} "
+            f"radiators={self.heater_setpoint} "
             f"room={self.room_temperature} humidity={self.humidity} {dry}"
             f"season={self.season} at_home={self.at_home} prepare={self.prepare} "
             f"in_schedule={self.in_schedule} boost={self.boost} drying={self.drying} "

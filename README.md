@@ -86,11 +86,22 @@ Houses set up before 0.4 read the season from an *HVAC season entity* until an o
 
 The frost protection temperature is set on the House device and applies to every room. The pre-heat temperature is set on the House device too; a room can override it with its own *Pre-heat temperature* (0 = use the House's). Its bathroom follows the room.
 
+### Radiator setpoint
+
+When a room temperature sensor is configured, radiators don't simply get the target. They get the target pushed by how far the room is from it, so a cold room is heated harder and a room that is too warm closes its radiators sooner:
+
+> radiator setpoint = target ± *Radiator multiplier* × |target − room|, the push rounded **up** to 0.5 °C
+
+- room 22.7 °C, target 23 °C: 0.3 × 2 = 0.6 → 1 → radiators 24 °C
+- room 23.7 °C, target 23 °C: 0.7 × 2 = 1.4 → 1.5 → radiators 21.5 °C
+
+A difference smaller than the *Radiator dead band* (default 0.2 °C) counts as none, so a room hovering at its target doesn't switch its battery radiator heads up and down all the time. The radiator correction (below) is added on top, and the result is never above *Max radiator temperature* (default 30 °C) or a radiator's own maximum. Multiplier 0 gives the plain target. All three are on the House device and apply to every room. This applies whenever radiators heat: comfort, eco, override, manual, pre-heat and frost protection. Without a room temperature sensor radiators get the plain target; bathroom radiators always do.
+
 ### Radiator correction
 
 Radiator heads sit next to the radiator and read higher than the room. When a room temperature sensor is configured, each radiator's setpoint is raised by how much higher it reads than the sensor:
 
-> room target 21 °C, sensor 20.5 °C, radiator reads 22.5 °C → radiator set to 23 °C
+> room target 21 °C, sensor 20.5 °C (push +1 °C), radiator reads 22.5 °C → radiator set to 21 + 1 + 2 = 24 °C
 
 The radiator then closes when the *room* reaches the target. The correction is the difference rounded **down** to whole 0.5 °C steps, so it is never more than the difference: 0.4 °C → none, 0.8 °C → 0.5 °C, 2.3 °C → 2 °C. It never exceeds *Max radiator correction* (default 3 °C).
 
@@ -100,7 +111,7 @@ An A/C heating during a boost gets its own correction the same way. Cooling is n
 
 ### Floor thermostat
 
-Every room on the same floor thermostat reports its highest radiator setpoint (bathroom radiators included, corrections and boost included). The thermostat is set to the highest of them, so the pump runs while any radiator on that floor wants heat:
+Every room on the same floor thermostat reports its highest radiator setpoint (bathroom radiators included, push and corrections included). The thermostat is set to the highest of them, so the pump runs while any radiator on that floor wants heat:
 
 > Bedroom 1 at 19 °C, Bedroom 2 at 12 °C, Bedroom 3 at 20 °C → thermostat 20 °C
 
@@ -110,12 +121,12 @@ With no radiator heating (cooling or comfort season) the thermostat is switched 
 
 In the heating season, when the room is more than *Boost threshold* below its target, boost starts. It ends when the room is within *Boost exit margin* of the target (default 0.3 °C). The **Boost method** select (Configuration on the room device; rooms with an A/C or floor heating) decides what the boost uses. It offers only what the room has:
 
-- *Raise radiator setpoints* (default): radiators get target + boost offset, capped at each device's max.
+- *None* (default): no extra devices; the radiators already push harder the colder the room is (see [Radiator setpoint](#radiator-setpoint)).
 - *A/C in heat mode:* the A/C heats to the target until boost ends, then switches off; its fan runs at *high*. Setpoint changes on the A/C during boost are reverted.
 - *Floor heating:* the floor heating runs at its *Floor heating temperature* until boost ends. That is the room's own floor heating, or its bathroom's if the room has none.
-- *Radiators and A/C*, *Radiators and floor heating*, *A/C and floor heating*, *Radiators, A/C and floor heating*.
+- *A/C and floor heating*.
 
-Radiators not raised by the boost stay at the target.
+Radiators are no boost method since 1.4. A room that boosted with them keeps the rest of its choice: *Radiators* becomes *None*, *Radiators and A/C* becomes *A/C*, *Radiators and floor heating* becomes *Floor heating*, all three becomes *A/C and floor heating*. A boost with method *None* doesn't start at all.
 
 ### Floor heating
 
@@ -182,7 +193,7 @@ The switch keeps its state across restarts.
 
 ## Manual changes on devices
 
-- **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction (and, during a boost, the boost offset) is taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C. A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
+- **Follow:** a setpoint changed on a remote or radiator becomes the room's target, clamped to the configured limits (the A/C set to 18 °C becomes 22 °C), and is applied to all devices of the room. A radiator's correction and its push are taken off first: turning a radiator showing 23 °C up to 24 °C raises the room target by 1 °C (and the push then follows the new difference). A radiator that only took over another radiator's setpoint (Tado syncing a room) is not a manual change. The manual target is dropped at the next period change: schedule on ↔ off, a bathroom schedule change, season, presence, in use or override changes, or any setting change on the device. A device turned off by hand stays off until the next period change.
 - **Block:** the planned temperature is restored straight away, and a device switched off by hand is switched back on. Choose it per room under **Configure → Manual changes** to keep a room out of manual mode entirely.
 - **Manual control:** a device someone changes by hand (setpoint, or switched on or off with its own controls or remote) is left exactly as they set it: Room Climate sends it nothing until the next period change (room schedule on ↔ off; season, presence, *In use*, *Prepare house* or override changes) or until *Resume automatic* is pressed (a setting change on the room device also ends it). The room's other devices stay automatic. Bathroom devices follow the bathroom schedule instead of the room's, so the bathroom and the room go to manual control separately. Status shows **Manual control**, and the *Target temperature* sensor lists the devices in its `manual_control` attribute. A radiator or A/C switched on by hand counts for the pump thermostat and the heat pump with its own setpoint. In a Tado room the heads copy each other's setpoint, so both heads usually go to manual control together.
 - **Resume automatic** (button on the room device): drops manual targets in the room and its bathroom, switches devices turned off by hand back on, ends an override and the bathroom's *Heating on*. The room follows its schedule again at once.
@@ -197,13 +208,14 @@ Commands sent by the integration carry their own context and devices get a 45 s 
 - *Automatic control* switch (see [Automatic control](#automatic-control)).
 - *Debug log file* switch (see [Logging](#logging)).
 - *Frost protection temperature* (12 °C, what rooms keep in frost protection), *Pre-heat temperature* (18 °C, for every room that has no pre-heat temperature of its own), *Drying humidity threshold* (65 %), *Drying hysteresis* (5 %).
+- Radiators (see [Radiator setpoint](#radiator-setpoint)): *Radiator multiplier* (2), *Max radiator temperature* (30 °C), *Radiator dead band* (0.2 °C).
 - Season (see [HVAC season](#hvac-season)): *Heating season temperature* (18 °C), *Cooling season temperature* (29 °C), *Indoor heating threshold* (21 °C), *Indoor cooling threshold* (29 °C), *Frost season temperature* (5 °C), *Season hysteresis* (1 °C), *Season change delay* (30 min).
 - *Heat pump response time* (5 min; with a heat pump or hot water), *Hot water temperature* (45 °C; with hot water), *Cloud command pause* (5 s).
 
 **Room device**
 - *Target temperature* sensor (all state as attributes: season, schedule, room temperature, humidity, boost, radiator corrections, drying, manual target, …) and *Status* sensor (`comfort`, `eco`, `boost`, `manual`, `override`, `preheat`, `frost_protection`, `drying`, `off`, `waiting`, `paused`).
 - Controls: *Resume automatic* (button), *In use*, *Override*, *Floor heating* and *Floor heating temperature* (27 °C) (rooms with floor heating), *Comfort temperature* (21 °C), *Eco temperature* (19 °C), *Cooling temperature* (25 °C), *Override temperature* (22 °C), *Pre-heat temperature* (0 = the House's; any other value overrides it for this room).
-- Configuration: *Boost method* (rooms with an A/C or floor heating), *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost offset* (3 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
+- Configuration: *Boost method* (rooms with an A/C or floor heating), *A/C response time* (60 s) (rooms with an A/C), *Boost threshold* (1.5 °C), *Boost exit margin* (0.3 °C), *Max radiator correction* (3 °C), *Override duration* (120 min).
 
 **Bathroom device**
 - *Target temperature*, *Status* (`bath_period`, `heating_on`, `follow_room`, `manual`, `frost_protection`, `off`, `waiting`, `paused`), *Comfort temperature* (24 °C), *Floor heating temperature* (27 °C), *Heating on* switch, *Heating on duration* (60 min).

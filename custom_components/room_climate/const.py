@@ -40,22 +40,24 @@ CONF_BATH_HEATERS: Final = "bath_heaters"
 CONF_BATH_FLOOR: Final = "bath_floor"
 CONF_BATH_SCHEDULE: Final = "bath_schedule"
 
-BOOST_HEATERS: Final = "heaters"  # raise radiator setpoints by the boost offset
+BOOST_NONE: Final = "none"  # no extra devices (radiators follow the room on their own)
 BOOST_COOLERS: Final = "coolers"  # run the A/C in heat mode
-BOOST_BOTH: Final = "both"  # radiators and A/C
 BOOST_FLOOR: Final = "floor"  # floor heating on (from 1.2)
-BOOST_HEATERS_FLOOR: Final = "heaters_floor"
 BOOST_COOLERS_FLOOR: Final = "coolers_floor"
-BOOST_ALL: Final = "all"
-# What each boost method uses, in the order the select offers them.
+# What each boost method uses, in the order the select offers them. Radiators are no
+# boost method since 1.4: their setpoint follows the room difference all the time.
 BOOST_PARTS: Final = {
-    BOOST_HEATERS: frozenset({"heaters"}),
+    BOOST_NONE: frozenset(),
     BOOST_COOLERS: frozenset({"coolers"}),
     BOOST_FLOOR: frozenset({"floor"}),
-    BOOST_BOTH: frozenset({"heaters", "coolers"}),
-    BOOST_HEATERS_FLOOR: frozenset({"heaters", "floor"}),
     BOOST_COOLERS_FLOOR: frozenset({"coolers", "floor"}),
-    BOOST_ALL: frozenset({"heaters", "coolers", "floor"}),
+}
+# Methods stored before 1.4 (they included the radiators): what they use now.
+LEGACY_BOOST_METHODS: Final = {
+    "heaters": BOOST_NONE,
+    "both": BOOST_COOLERS,
+    "heaters_floor": BOOST_FLOOR,
+    "all": BOOST_COOLERS_FLOOR,
 }
 
 POLICY_FOLLOW: Final = "follow"
@@ -133,6 +135,7 @@ BATH_STATUSES: Final = [
 COMMAND_GRACE_SECONDS: Final = 45  # ignore device reports this long after we command it
 UPDATE_INTERVAL_SECONDS: Final = 60
 CORRECTION_STEP: Final = 0.5  # radiator corrections are whole steps of this, rounded down
+RADIATOR_STEP: Final = 0.5  # the radiator push (multiplier × difference) is rounded up to this
 
 # ---- Entity defaults ----------------------------------------------------
 # key: (name, min, max, step, default, unit)
@@ -141,6 +144,10 @@ HOUSE_NUMBERS: Final = {
     "preheat": ("Pre-heat temperature", 10.0, 25.0, 0.5, 18.0, "°C"),
     "dry_humidity": ("Drying humidity threshold", 40.0, 90.0, 1.0, 65.0, "%"),
     "dry_hysteresis": ("Drying hysteresis", 1.0, 20.0, 1.0, 5.0, "%"),
+    # Radiators: target + gain × (target − room), rounded away from the target to 0.5 °C
+    "radiator_gain": ("Radiator multiplier", 0.0, 5.0, 0.5, 2.0, "×"),
+    "radiator_max": ("Max radiator temperature", 15.0, 30.0, 0.5, 30.0, "°C"),
+    "radiator_deadband": ("Radiator dead band", 0.0, 1.0, 0.1, 0.2, "°C"),
     # Season, computed from the outdoor and reference (indoor) temperatures
     "heat_season": ("Heating season temperature", 5.0, 30.0, 0.5, 18.0, "°C"),
     "cool_season": ("Cooling season temperature", 15.0, 40.0, 0.5, 29.0, "°C"),
@@ -162,7 +169,6 @@ ROOM_NUMBERS: Final = {
     "heat_eco": ("Eco temperature", 10.0, 28.0, 0.5, 19.0, "°C"),
     "cool": ("Cooling temperature", 18.0, 32.0, 0.5, 25.0, "°C"),
     "boost_delta": ("Boost threshold", 0.5, 6.0, 0.5, 1.5, "°C"),
-    "boost_offset": ("Boost offset", 0.5, 8.0, 0.5, 3.0, "°C"),
     "boost_margin": ("Boost exit margin", 0.0, 2.0, 0.1, 0.3, "°C"),
     "correction_max": ("Max radiator correction", 0.0, 6.0, 0.5, 3.0, "°C"),
     "override_temp": ("Override temperature", 10.0, 32.0, 0.5, 22.0, "°C"),
@@ -208,7 +214,9 @@ CONFIG_NUMBERS: Final = {
     "season_hysteresis",
     "season_delay",
     "boost_delta",
-    "boost_offset",
+    "radiator_gain",
+    "radiator_max",
+    "radiator_deadband",
     "boost_margin",
     "correction_max",
     "override_minutes",
